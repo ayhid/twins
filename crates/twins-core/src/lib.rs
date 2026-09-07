@@ -5,5 +5,6 @@ pub mod fsutil;
 pub mod group;
 pub mod hash;
 pub mod human;
+pub mod report;
 pub mod safety;
 pub mod scan;
