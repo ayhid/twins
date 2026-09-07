@@ -5,3 +5,5 @@
 coverage.*
 .DS_Store
 .dev-workflow.metrics.jsonl
+.worktrees/
+target/
