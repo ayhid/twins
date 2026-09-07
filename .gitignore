@@ -1,9 +1,4 @@
-/bin/
-/dist/
-*.test
-*.out
-coverage.*
+target/
+.worktrees/
 .DS_Store
 .dev-workflow.metrics.jsonl
-.worktrees/
-target/
