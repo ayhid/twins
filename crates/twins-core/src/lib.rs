@@ -2,5 +2,7 @@
 //! byte-identical files.
 
 pub mod fsutil;
+pub mod hash;
 pub mod human;
 pub mod safety;
+pub mod scan;
