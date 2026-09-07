@@ -1,6 +1,8 @@
 //! Human-readable byte sizes, binary units (1 KiB = 1024 B).
 
 const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+/// 2^64: the first value that no longer fits in a `u64`.
+const MAX_BYTES: f64 = 18_446_744_073_709_551_616.0;
 
 /// Renders a byte count such as `1.5 MiB`.
 #[must_use]
@@ -27,7 +29,8 @@ pub struct ParseSizeError(String);
 /// binary (1K = 1024) whatever the spelling.
 ///
 /// # Errors
-/// [`ParseSizeError`] on an empty number, a negative value or an unknown unit.
+/// [`ParseSizeError`] on an empty number, a negative value, an unknown unit
+/// or a value that does not fit in `u64`.
 pub fn parse_size(s: &str) -> Result<u64, ParseSizeError> {
     let lower = s.trim().to_ascii_lowercase();
     let split = lower
@@ -36,15 +39,13 @@ pub fn parse_size(s: &str) -> Result<u64, ParseSizeError> {
     let (num, unit) = lower.split_at(split);
     let mult = multiplier(unit.trim()).ok_or_else(|| ParseSizeError(s.to_owned()))?;
     let value: f64 = num.parse().map_err(|_| ParseSizeError(s.to_owned()))?;
-    if num.is_empty() || value < 0.0 || !value.is_finite() {
+    #[allow(clippy::cast_precision_loss)] // bounds check only
+    let bytes = value * mult as f64;
+    if num.is_empty() || value < 0.0 || !bytes.is_finite() || bytes >= MAX_BYTES {
         return Err(ParseSizeError(s.to_owned()));
     }
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    Ok((value * mult as f64) as u64)
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // checked above
+    Ok(bytes as u64)
 }
 
 fn multiplier(unit: &str) -> Option<u64> {

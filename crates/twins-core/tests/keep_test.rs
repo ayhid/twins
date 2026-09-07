@@ -42,7 +42,7 @@ fn oldest_keeps_the_earliest_mtime() {
         meta("/x/old", 100, 2),
         meta("/x/mid", 50, 3),
     ]);
-    let (keep, remove) = keeper(Strategy::Oldest).choose(&g);
+    let (keep, remove) = keeper(Strategy::Oldest).choose(&g).unwrap();
     assert_eq!(keep.path(), Path::new("/x/old"));
     assert_eq!(remove.len(), 2);
 }
@@ -50,7 +50,7 @@ fn oldest_keeps_the_earliest_mtime() {
 #[test]
 fn newest_keeps_the_latest_mtime() {
     let g = group(vec![meta("/x/new", 10, 1), meta("/x/old", 100, 2)]);
-    let (keep, _) = keeper(Strategy::Newest).choose(&g);
+    let (keep, _) = keeper(Strategy::Newest).choose(&g).unwrap();
     assert_eq!(keep.path(), Path::new("/x/new"));
 }
 
@@ -61,7 +61,7 @@ fn shortest_path_prefers_fewest_components_then_shortest_name() {
         meta("/a/longer-name", 10, 2),
         meta("/a/short", 10, 3),
     ]);
-    let (keep, _) = keeper(Strategy::ShortestPath).choose(&g);
+    let (keep, _) = keeper(Strategy::ShortestPath).choose(&g).unwrap();
     assert_eq!(keep.path(), Path::new("/a/short"));
 }
 
@@ -74,11 +74,11 @@ fn in_dir_prefers_files_under_dir_then_falls_back_to_oldest() {
         meta("/keeper/decoy", 2000, 4),
     ]);
     let k = Keeper::new(Strategy::InDir, Some(PathBuf::from("/keep/")));
-    let (keep, _) = k.choose(&g);
+    let (keep, _) = k.choose(&g).unwrap();
     assert_eq!(keep.path(), Path::new("/keep/old"));
 
     let g2 = group(vec![meta("/other/b", 10, 1), meta("/other/a", 100, 2)]);
-    let (keep, _) = k.choose(&g2);
+    let (keep, _) = k.choose(&g2).unwrap();
     assert_eq!(keep.path(), Path::new("/other/a"));
 }
 
@@ -89,7 +89,7 @@ fn ties_break_on_depth_then_path() {
         meta("/a/y", 10, 2),
         meta("/a/x", 10, 3),
     ]);
-    let (keep, _) = keeper(Strategy::Oldest).choose(&g);
+    let (keep, _) = keeper(Strategy::Oldest).choose(&g).unwrap();
     assert_eq!(keep.path(), Path::new("/a/x"));
 }
 
@@ -100,7 +100,7 @@ fn never_removes_hardlinks_of_the_kept_file() {
         meta("/x/link", 100, 1),
         meta("/x/copy", 10, 2),
     ]);
-    let (keep, remove) = keeper(Strategy::Oldest).choose(&g);
+    let (keep, remove) = keeper(Strategy::Oldest).choose(&g).unwrap();
     assert_eq!(keep.identity(), Identity::new(1, 1));
     assert_eq!(remove.len(), 1);
     assert_eq!(remove[0].path(), Path::new("/x/copy"));
@@ -118,4 +118,11 @@ fn plan_reclaimable_counts_physical_bytes_once() {
     assert_eq!(actions[0].reclaimable(), 10);
     assert_eq!(actions[1].reclaimable(), 10);
     assert_eq!(total_reclaimable(&actions), 20);
+}
+
+#[test]
+fn empty_group_yields_no_decision_and_no_action() {
+    let g = group(vec![]);
+    assert!(keeper(Strategy::Oldest).choose(&g).is_none());
+    assert!(plan(&[g], &keeper(Strategy::Oldest)).is_empty());
 }

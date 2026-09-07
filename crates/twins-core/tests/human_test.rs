@@ -23,7 +23,16 @@ fn parse_size_accepts_bare_numbers_and_units() {
 
 #[test]
 fn parse_size_rejects_garbage() {
-    for s in ["", "abc", "10X", "-1", "1..2", "K"] {
+    for s in [
+        "",
+        "abc",
+        "10X",
+        "-1",
+        "1..2",
+        "K",
+        "99999999999999999999GiB",
+        "inf",
+    ] {
         assert!(parse_size(s).is_err(), "{s:?}");
     }
 }

@@ -86,6 +86,8 @@ where
         Counters::bump(&counters.errors);
         on_error(path, &err);
     };
+    // Zero means one thread per CPU: the walk is stat-bound and does not
+    // saturate an SSD, unlike hashing, which `group::find` caps at 8.
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(opts.workers)
         .build()

@@ -84,29 +84,24 @@ impl Keeper {
         self.strategy
     }
 
-    /// Returns the file to keep and the files to remove. Hardlinks of the
-    /// kept file are never removed: they already share its data.
+    /// Returns the file to keep and the files to remove, or `None` for an
+    /// empty group. Hardlinks of the kept file are never removed: they
+    /// already share its data.
     #[must_use]
-    pub fn choose<'g>(&self, g: &'g Group) -> (&'g FileMeta, Vec<&'g FileMeta>) {
-        let keep = self.pick(g.files());
+    pub fn choose<'g>(&self, g: &'g Group) -> Option<(&'g FileMeta, Vec<&'g FileMeta>)> {
+        let keep = self.pick(g.files())?;
         let remove = g
             .files()
             .iter()
             .filter(|f| f.identity() != keep.identity())
             .collect();
-        (keep, remove)
+        Some((keep, remove))
     }
 
-    /// The file to keep among `files`, which must be non-empty.
-    ///
-    /// # Panics
-    /// When `files` is empty.
+    /// The file to keep among `files`, or `None` when there is none.
     #[must_use]
-    pub fn pick<'f>(&self, files: &'f [FileMeta]) -> &'f FileMeta {
-        files
-            .iter()
-            .min_by(|a, b| self.order(a, b))
-            .expect("non-empty group")
+    pub fn pick<'f>(&self, files: &'f [FileMeta]) -> Option<&'f FileMeta> {
+        files.iter().min_by(|a, b| self.order(a, b))
     }
 
     /// Total order whose minimum is the file to keep.
@@ -180,18 +175,18 @@ impl Action {
     }
 }
 
-/// Applies a keeper to every group.
+/// Applies a keeper to every group. Empty groups produce no action.
 #[must_use]
 pub fn plan(groups: &[Group], keeper: &Keeper) -> Vec<Action> {
     groups
         .iter()
-        .map(|g| {
-            let (keep, remove) = keeper.choose(g);
-            Action {
+        .filter_map(|g| {
+            let (keep, remove) = keeper.choose(g)?;
+            Some(Action {
                 group: g.clone(),
                 keep: keep.clone(),
                 remove: remove.into_iter().cloned().collect(),
-            }
+            })
         })
         .collect()
 }
