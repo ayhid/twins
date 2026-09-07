@@ -38,6 +38,12 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// Builds an identity from raw numbers.
+    #[must_use]
+    pub fn new(dev: u64, inode: u64) -> Self {
+        Self { dev, inode }
+    }
+
     /// Device number.
     #[must_use]
     pub fn dev(self) -> u64 {
@@ -63,6 +69,20 @@ pub struct FileMeta {
 }
 
 impl FileMeta {
+    /// Builds a snapshot from known values, for callers that already hold
+    /// the metadata (caches, tests). `nlink` is 1 and `dataless` false.
+    #[must_use]
+    pub fn new(path: PathBuf, size: u64, mtime: SystemTime, identity: Identity) -> Self {
+        Self {
+            path,
+            size,
+            mtime,
+            identity,
+            nlink: 1,
+            dataless: false,
+        }
+    }
+
     /// Path the metadata was read from.
     #[must_use]
     pub fn path(&self) -> &Path {
