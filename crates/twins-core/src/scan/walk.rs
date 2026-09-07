@@ -1,7 +1,10 @@
 //! The walk itself: root validation, directory traversal, candidate
 //! filtering.
 
+use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rayon::prelude::*;
@@ -114,6 +117,7 @@ fn collect_files(
     report: &(impl Fn(&Path, EntryError) + Sync),
 ) -> Result<Vec<PathBuf>, ScanError> {
     let mut files = Vec::new();
+    let volumes = VolumeCache::default();
     let iter = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -122,7 +126,7 @@ fn collect_files(
                 return true;
             }
             let enter = !rules.skip_dir(e.path(), e.file_name())
-                && (opts.include_remote || is_local(e.path()));
+                && (opts.include_remote || volumes.is_local(e));
             if !enter {
                 Counters::bump(&counters.skipped);
             }
@@ -161,8 +165,26 @@ fn collect_files(
     Ok(files)
 }
 
-fn is_local(path: &Path) -> bool {
-    fsutil::is_local_volume(path).unwrap_or(false)
+/// Remembers whether each device is a local volume. A mount boundary
+/// changes the device number, so one `statfs` per device is enough
+/// instead of one per directory.
+#[derive(Default)]
+struct VolumeCache {
+    by_dev: Mutex<HashMap<u64, bool>>,
+}
+
+impl VolumeCache {
+    fn is_local(&self, entry: &walkdir::DirEntry) -> bool {
+        let Ok(md) = entry.metadata() else {
+            return false;
+        };
+        let mut map = self
+            .by_dev
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *map.entry(md.dev())
+            .or_insert_with(|| fsutil::is_local_volume(entry.path()).unwrap_or(false))
+    }
 }
 
 fn handle_file(
