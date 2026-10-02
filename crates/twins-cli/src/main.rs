@@ -1,6 +1,7 @@
 //! `twins` command-line entry point.
 
 mod cli;
+mod progress;
 mod run;
 
 use std::process::ExitCode;

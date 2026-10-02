@@ -201,3 +201,58 @@ fn throttled_observer_sees_the_same_stage_sequence() {
     assert_eq!(plain.last(), Some(&completed));
     assert_eq!(throttled.last(), Some(&completed));
 }
+
+#[test]
+fn walk_reports_a_running_file_count() {
+    let (one, two) = (mib(1), mib(2));
+    let t = Tree::build(&[("a.bin", &one), ("sub/b.bin", &one), ("c.bin", &two)]);
+    let spec = ScanSpec::new(scan::Options::new(vec![t.root().into()]).home(t.root().into()));
+    let rec = Recorder::default();
+    pipeline::scan(&spec, &rec, &CancelToken::new()).unwrap();
+
+    let events = rec.events();
+    let walk_start = events
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Event::StageStarted {
+                    stage: Stage::Walk,
+                    ..
+                }
+            )
+        })
+        .expect("walk starts");
+    let walk_end = events
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Event::StageStarted {
+                    stage: Stage::SizeGrouping,
+                    ..
+                }
+            )
+        })
+        .expect("size grouping starts");
+    let walked: Vec<(u64, Option<u64>)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Event::Progress {
+                stage: Stage::Walk,
+                done,
+                total,
+            } => {
+                assert!(
+                    walk_start < i && i < walk_end,
+                    "walk progress outside its stage"
+                );
+                Some((*done, *total))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(walked.iter().all(|(_, total)| total.is_none()));
+    assert_eq!(walked.iter().map(|(done, _)| *done).max(), Some(3));
+}

@@ -341,3 +341,19 @@ fn unreadable_files_are_counted_and_listed_with_verbose() {
 
     restore();
 }
+
+#[test]
+fn json_stderr_is_silent_when_not_a_terminal() {
+    // assert_cmd pipes stderr, so it is not a terminal: no progress line.
+    let dir = fixture();
+    let out = twins()
+        .args(["scan", "--json", "--exclude", "*.log"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stderr("")
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice::<serde_json::Value>(&out).expect("stdout is JSON");
+}

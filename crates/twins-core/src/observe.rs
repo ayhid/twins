@@ -7,7 +7,8 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -171,18 +172,42 @@ impl Observer for NoopObserver {
     fn on_event(&self, _event: &Event) {}
 }
 
-/// Rate-limiting wrapper around another observer. Placeholder: forwards
-/// every event unchanged.
+/// Rate-limiting wrapper around another observer.
+///
+/// Forwards a [`Event::Progress`] only when at least `interval` has passed
+/// since the last one it forwarded, when it is the first `Progress` after a
+/// [`Event::StageStarted`], or when it completes its stage
+/// (`total == Some(done)`). Every other `Progress` is dropped.
+///
+/// It never drops or delays [`Event::StageStarted`], [`Event::FileSkipped`]
+/// or [`Event::Finished`], and never reorders the events it forwards. The
+/// check is lock-free (one atomic compare-and-swap), so hashing threads can
+/// call it for every file.
 #[derive(Debug)]
 pub struct Throttle<O> {
     inner: O,
+    interval: Duration,
+    base: Instant,
+    /// Nanoseconds since `base` of the last forwarded `Progress`, or
+    /// [`OPEN`] when the next `Progress` must pass.
+    last: AtomicU64,
 }
 
+/// Sentinel for [`Throttle::last`]: the next `Progress` passes.
+const OPEN: u64 = u64::MAX;
+
 impl<O> Throttle<O> {
-    /// Wraps `inner`.
+    /// Wraps `inner`, forwarding at most one `Progress` per `interval`
+    /// besides the first and the final one of each stage. A zero interval
+    /// forwards everything.
     #[must_use]
-    pub fn new(inner: O, _interval: std::time::Duration) -> Self {
-        Self { inner }
+    pub fn new(inner: O, interval: Duration) -> Self {
+        Self {
+            inner,
+            interval,
+            base: Instant::now(),
+            last: AtomicU64::new(OPEN),
+        }
     }
 
     /// The wrapped observer.
@@ -195,10 +220,44 @@ impl<O> Throttle<O> {
     pub fn into_inner(self) -> O {
         self.inner
     }
+
+    /// Nanoseconds elapsed since `base`, saturating at `u64::MAX - 1` so it
+    /// never collides with [`OPEN`].
+    fn now(&self) -> u64 {
+        u64::try_from(self.base.elapsed().as_nanos())
+            .unwrap_or(u64::MAX)
+            .min(OPEN - 1)
+    }
+
+    /// Whether a non-final `Progress` may pass now. Claims the slot with a
+    /// compare-and-swap so concurrent callers cannot both pass.
+    fn admit(&self) -> bool {
+        let now = self.now();
+        let prev = self.last.load(Ordering::Relaxed);
+        let interval = u64::try_from(self.interval.as_nanos()).unwrap_or(u64::MAX);
+        let due = prev == OPEN || now.saturating_sub(prev) >= interval;
+        due && self
+            .last
+            .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    }
 }
 
 impl<O: Observer> Observer for Throttle<O> {
     fn on_event(&self, event: &Event) {
+        match event {
+            Event::StageStarted { .. } => {
+                self.last.store(OPEN, Ordering::Relaxed);
+            }
+            Event::Progress { done, total, .. } => {
+                if *total == Some(*done) {
+                    self.last.store(self.now(), Ordering::Relaxed);
+                } else if !self.admit() {
+                    return;
+                }
+            }
+            _ => {}
+        }
         self.inner.on_event(event);
     }
 }
