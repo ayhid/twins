@@ -730,19 +730,24 @@ fn stages(seen: &[Event]) -> Vec<(Stage, u8, u8)> {
 | A6 | Size-grouping progress line wording (`[2/4] size grouping  5 000 candidates`) | Pattern 7 | Low: cosmetic; not in the approved examples, confirm during verification |
 | A7 | Digit grouping uses a plain ASCII space (copied from the approved examples), not U+202F | Pattern 7 | Low: cosmetic |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Clippy on 1.90 vs D-16.**
+All three questions were settled during planning by adopting the recommendation below; none is left open for execution.
+
+1. **Clippy on 1.90 vs D-16.** RESOLVED
    - What we know: success criterion 5 says "passes tests and clippy (pedantic) on Rust 1.90"; D-16 says the MSRV job runs build and test, and the stable job runs clippy. Stable clippy honours `rust-version = "1.90"` for MSRV-gated lints (verified by the probe).
    - What's unclear: whether criterion 5 needs a clippy run on the 1.90 toolchain itself.
    - Recommendation: follow D-16 literally in CI. During phase verification, run `cargo +1.90.0 clippy --workspace --all-targets -- -D warnings` once locally (after `rustup toolchain install 1.90.0 --profile minimal --component clippy`) and record the result. If it is noisy because the older clippy lacks newer allow names, record that and rely on stable clippy.
+   - Resolution: recommendation adopted. CI follows D-16 as written (stable job runs clippy, MSRV job runs build and test). Stable clippy, MSRV-aware through `rust-version = "1.90"`, is the binding lint gate. Plan 01-04 Task 1 installs the 1.90.0 toolchain with clippy, runs `cargo +1.90.0 clippy --workspace --all-targets -- -D warnings` once, and records the result in its summary; unknown-lint noise from the older clippy is recorded and not treated as a failure.
 
-2. **Should `--jobs` keep driving both pools?**
+2. **Should `--jobs` keep driving both pools?** RESOLVED
    - What we know: today `args.jobs` goes to `scan::Options::workers` and `group::Options::workers` [VERIFIED: run.rs:29,45].
    - Recommendation: keep both (parity). `ScanSpec` carries `hash_workers` separately so the app can tune them later.
+   - Resolution: recommendation adopted. Plan 01-01 (Step E) builds `ScanSpec::new(opts).hash_workers(args.jobs)`, so `--jobs` still feeds both the walk pool and the hash pool, and `ScanSpec` keeps `hash_workers` as its own field.
 
-3. **SIGTERM handling.**
+3. **SIGTERM handling.** RESOLVED
    - Not required by Phase 1. Registering `flag::register(SIGTERM, flag)` would make `kill` cancel gracefully too; leave it for the agent phase unless trivial to add alongside SIGINT.
+   - Resolution: recommendation adopted. Phase 1 handles SIGINT only (D-02 ties exit 130 to SIGINT); plan 01-07 registers the SIGINT handler and does not register SIGTERM. Graceful SIGTERM cancel belongs to the agent phase.
 
 ## Environment Availability
 
