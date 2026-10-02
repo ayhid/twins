@@ -1,4 +1,5 @@
-//! Human-readable byte sizes, binary units (1 KiB = 1024 B).
+//! Human-readable byte sizes and counts. Sizes use binary units
+//! (1 KiB = 1024 B).
 
 const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
 /// 2^64: the first value that no longer fits in a `u64`.
@@ -59,8 +60,18 @@ fn multiplier(unit: &str) -> Option<u64> {
     })
 }
 
-/// Renders a count with its digits grouped. Placeholder: no grouping yet.
+/// Renders a count with a plain ASCII space between each group of three
+/// digits, counted from the right: `48210` renders as `48 210`.
 #[must_use]
 pub fn group_digits(n: u64) -> String {
-    n.to_string()
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        let left = digits.len() - i;
+        if i > 0 && left.is_multiple_of(3) {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
 }
