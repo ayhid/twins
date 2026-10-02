@@ -1,0 +1,1 @@
+{"content":"redb is single-process: a second process opening the db gets DatabaseAlreadyOpen (try_lock enforced). For a hash cache shared by CLI, app and background agent concurrently, SQLite (rusqlite bundled, WAL, busy_timeout) is the fit.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-10-02T08:19:46.640Z","ttl":86400000,"kind":"web"}

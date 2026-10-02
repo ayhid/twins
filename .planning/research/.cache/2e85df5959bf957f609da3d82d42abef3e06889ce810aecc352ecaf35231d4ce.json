@@ -1,0 +1,1 @@
+{"content":"std::fs::File::lock/lock_shared/try_lock/try_lock_shared/unlock stabilized in Rust 1.89 (flock on Apple platforms). Workspace MSRV 1.85 must be bumped to use it, otherwise fs4.","source":"web","provider":"websearch","confidence":"MEDIUM","fetched_at":"2026-10-02T08:19:46.558Z","ttl":86400000,"kind":"web"}
