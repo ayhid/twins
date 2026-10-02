@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use rayon::prelude::*;
 
@@ -40,6 +40,13 @@ impl fmt::Display for Stage {
 }
 
 /// Snapshot of one stage's advancement.
+///
+/// Each stage begins with exactly one event where `done == 0`, sent from the
+/// calling thread before any worker event of that stage, even when the stage
+/// has nothing to do. Every later event of the stage has `done >= 1`, so a
+/// `done == 0` event unambiguously marks a stage start. Within a stage,
+/// `done` rises by exactly one per event, so the last event of a stage that
+/// ran to completion is `done == total`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
     /// Stage being run.
@@ -127,6 +134,10 @@ impl<'a> Options<'a> {
     }
 
     /// Called from worker threads as each stage advances.
+    ///
+    /// Each stage begins with exactly one call where `done == 0`, made from the
+    /// calling thread before any worker event of that stage, even when the
+    /// stage has nothing to do.
     #[must_use]
     pub fn on_progress(self, f: ProgressFn<'a>) -> Self {
         Self {
@@ -205,6 +216,9 @@ fn find_in_pool(idx: &Index, opts: &Options<'_>) -> Result<Vec<Group>, FindError
         |m| opts.hasher.full(m),
     )?;
     let total = full.len() as u64;
+    if opts.verify {
+        opts.progress(Stage::Verify, 0, total);
+    }
     let mut groups = Vec::with_capacity(full.len());
     for (i, b) in full.into_iter().enumerate() {
         if opts.cancelled() {
@@ -291,7 +305,11 @@ where
     F: Fn(&FileMeta) -> Result<K, HashError> + Sync,
 {
     let total = reps.len() as u64;
-    let done = AtomicU64::new(0);
+    // Stage-start marker, sent before any worker can report.
+    opts.progress(stage, 0, total);
+    // Counting and reporting happen under one lock, so observers see `done`
+    // rise by one per event and the stage's last event is `(total, total)`.
+    let done = Mutex::new(0u64);
     let results: Vec<Option<(Identity, Result<K, HashError>)>> = reps
         .par_iter()
         .map(|m| {
@@ -299,7 +317,10 @@ where
                 return None;
             }
             let r = key(m);
-            opts.progress(stage, done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
+            *n += 1;
+            opts.progress(stage, *n, total);
+            drop(n);
             Some((m.identity(), r))
         })
         .collect();

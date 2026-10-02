@@ -280,3 +280,144 @@ fn unreadable_file_is_reported_as_file_skipped() {
         "no FileSkipped for {expected}"
     );
 }
+
+/// One duplicate pair of 1 MiB files, so both hashing stages have work.
+fn pair_tree() -> Tree {
+    let one = mib(1);
+    Tree::build(&[("a.bin", &one), ("b.bin", &one)])
+}
+
+/// The `(stage, step, steps)` of every `StageStarted`, in order.
+fn stages(seen: &[Event]) -> Vec<(Stage, u8, u8)> {
+    seen.iter()
+        .filter_map(|e| match e {
+            Event::StageStarted { stage, step, steps } => Some((*stage, *step, *steps)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn stage_events_in_order_without_verify() {
+    let t = pair_tree();
+    let rec = Recorder::default();
+    pipeline::scan(&spec(&t), &rec, &CancelToken::new()).unwrap();
+    let events = rec.events();
+
+    assert_eq!(
+        stages(&events),
+        vec![
+            (Stage::Walk, 1, 4),
+            (Stage::SizeGrouping, 2, 4),
+            (Stage::PartialHash, 3, 4),
+            (Stage::FullHash, 4, 4),
+        ]
+    );
+    assert!(is_finished(events.last().unwrap(), Outcome::Completed));
+}
+
+#[test]
+fn stage_events_in_order_with_verify() {
+    let t = pair_tree();
+    let rec = Recorder::default();
+    pipeline::scan(&spec(&t).verify(true), &rec, &CancelToken::new()).unwrap();
+    let events = rec.events();
+
+    assert_eq!(
+        stages(&events),
+        vec![
+            (Stage::Walk, 1, 5),
+            (Stage::SizeGrouping, 2, 5),
+            (Stage::PartialHash, 3, 5),
+            (Stage::FullHash, 4, 5),
+            (Stage::Verify, 5, 5),
+        ]
+    );
+    assert!(is_finished(events.last().unwrap(), Outcome::Completed));
+}
+
+#[test]
+fn stage_events_on_empty_tree() {
+    let t = Tree::build(&[]);
+    let rec = Recorder::default();
+    pipeline::scan(&spec(&t), &rec, &CancelToken::new()).unwrap();
+    let events = rec.events();
+
+    assert_eq!(
+        stages(&events),
+        vec![
+            (Stage::Walk, 1, 4),
+            (Stage::SizeGrouping, 2, 4),
+            (Stage::PartialHash, 3, 4),
+            (Stage::FullHash, 4, 4),
+        ]
+    );
+    assert!(is_finished(events.last().unwrap(), Outcome::Completed));
+}
+
+#[test]
+fn progress_events_follow_their_stage_start() {
+    let t = pair_tree();
+    let rec = Recorder::default();
+    pipeline::scan(&spec(&t).verify(true), &rec, &CancelToken::new()).unwrap();
+    let events = rec.events();
+
+    let mut current: Option<Stage> = None;
+    let mut progressed = Vec::new();
+    for e in &events {
+        match e {
+            Event::StageStarted { stage, .. } => current = Some(*stage),
+            Event::Progress { stage, .. } => {
+                assert_eq!(Some(*stage), current, "{e:?} outside its stage");
+                if progressed.last() != Some(stage) {
+                    progressed.push(*stage);
+                }
+            }
+            _ => {}
+        }
+    }
+    // Every hashing stage had work, so each reported progress.
+    for stage in [Stage::PartialHash, Stage::FullHash, Stage::Verify] {
+        assert!(progressed.contains(&stage), "no progress for {stage}");
+    }
+}
+
+/// Runs `spec` with a token raised when `stage` starts and checks the run
+/// stopped there: cancelled error, no later stage, `Finished(Cancelled)`.
+fn assert_cancelled_at(spec: &ScanSpec, stage: Stage) -> Vec<Event> {
+    let token = CancelToken::new();
+    let obs = CancelOn::new(stage, &token);
+
+    let err = pipeline::scan(spec, &obs, &token).unwrap_err();
+
+    assert!(err.is_cancelled(), "{err:?}");
+    let seen = obs.seen();
+    let started = stages(&seen);
+    assert_eq!(
+        started.last().map(|s| s.0),
+        Some(stage),
+        "stages after cancel: {started:?}"
+    );
+    assert!(is_finished(seen.last().unwrap(), Outcome::Cancelled));
+    seen
+}
+
+#[test]
+fn cancel_at_partial_hash_stops_before_full_hash() {
+    let t = pair_tree();
+    let seen = assert_cancelled_at(&spec(&t), Stage::PartialHash);
+    assert!(!seen.iter().any(|e| is_started(e, Stage::FullHash)));
+}
+
+#[test]
+fn cancel_at_full_hash_returns_cancelled() {
+    let t = pair_tree();
+    let seen = assert_cancelled_at(&spec(&t).verify(true), Stage::FullHash);
+    assert!(!seen.iter().any(|e| is_started(e, Stage::Verify)));
+}
+
+#[test]
+fn cancel_at_verify_returns_cancelled() {
+    let t = pair_tree();
+    assert_cancelled_at(&spec(&t).verify(true), Stage::Verify);
+}

@@ -199,7 +199,10 @@ impl From<FindError> for PipelineError {
 
 /// Runs the whole scan pipeline and plans which copy of each duplicate
 /// group survives. Events go to `observer`; the last one is always
-/// [`Event::Finished`], whatever the outcome. Unreadable files are
+/// [`Event::Finished`], whatever the outcome. Every stage opens with one
+/// [`Event::StageStarted`], in the order walk, size grouping, partial hash,
+/// full hash and, with verify, verify, even when a stage has nothing to do;
+/// a stage's [`Event::Progress`] events follow its start. Unreadable files are
 /// reported as [`Event::FileSkipped`] and counted in
 /// [`ScanOutcome::errors`].
 ///
@@ -297,11 +300,17 @@ fn hash_stages(
         .verify(spec.verify)
         .cancel(cancel.flag())
         .on_progress(Box::new(|p| {
-            observer.on_event(&Event::Progress {
-                stage: Stage::from(p.stage),
-                done: p.done,
-                total: Some(p.total),
-            });
+            let stage = Stage::from(p.stage);
+            // `find` opens every stage with one `done == 0` marker.
+            if p.done == 0 {
+                started(observer, spec, stage);
+            } else {
+                observer.on_event(&Event::Progress {
+                    stage,
+                    done: p.done,
+                    total: Some(p.total),
+                });
+            }
         }))
         .on_error(Box::new(|path: &Path, err: &GroupError| {
             errors.fetch_add(1, Ordering::Relaxed);
