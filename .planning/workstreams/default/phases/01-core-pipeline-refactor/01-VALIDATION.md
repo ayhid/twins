@@ -3,9 +3,9 @@ phase: "1"
 slug: "core-pipeline-refactor"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: "2026-10-02"
 ---
 
@@ -43,16 +43,16 @@ Task IDs are assigned when the plans are written. Until then, each row maps a re
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 1-xx | — | 0 | CORE-01 | — | N/A | characterization (CLI) | `cargo test -p twins-cli --test cli_test` | ✅ file / ❌ W0 new tests | ⬜ pending |
-| 1-xx | — | — | CORE-01 | — | N/A | integration (core) | `cargo test -p twins-core --test pipeline_test` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-01 | — | N/A | unit | `cargo test -p twins-core --test observe_test` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-01 | — | stdout stays pure JSON | CLI | `cargo test -p twins-cli --test cli_test json_stderr` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-02 | — | no partial report after cancel | integration (core) | `cargo test -p twins-core --test pipeline_test cancel` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-02 | — | N/A | unit | `cargo test -p twins-core --test scan_test cancel` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-02 | — | N/A | unit | `cargo test -p twins-core --test hash_test cancel` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-02 | — | exit 130 distinct from 1 and 2 | CLI | `cargo test -p twins-cli --test cli_test exit_code` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-03 | — | report mode derived in core | integration (core) | `cargo test -p twins-core --test pipeline_test dry_run` | ❌ W0 | ⬜ pending |
-| 1-xx | — | — | CORE-04 | — | N/A | CI | `cargo +1.90.0 test --workspace` (CI `msrv` job) | ❌ W0 | ⬜ pending |
+| 1-xx | 01-01 | 1 | CORE-01 | — | N/A | characterization (CLI) | `cargo test -p twins-cli --test cli_test` | ✅ | ✅ green |
+| 1-xx | 01-01, 01-02, 01-05 | 1-3 | CORE-01 | — | N/A | integration (core) | `cargo test -p twins-core --test pipeline_test` | ✅ | ✅ green |
+| 1-xx | 01-01, 01-03 | 1-2 | CORE-01 | — | N/A | unit | `cargo test -p twins-core --test observe_test` | ✅ | ✅ green |
+| 1-xx | 01-03 | 2 | CORE-01 | — | stdout stays pure JSON | CLI | `cargo test -p twins-cli --test cli_test json` | ✅ | ✅ green |
+| 1-xx | 01-02, 01-06 | 2-3 | CORE-02 | — | no partial report after cancel | integration (core) | `cargo test -p twins-core --test pipeline_test cancel` | ✅ | ✅ green |
+| 1-xx | 01-05 | 3 | CORE-02 | — | N/A | unit | `cargo test -p twins-core --test scan_test cancel` | ✅ | ✅ green |
+| 1-xx | 01-06 | 3 | CORE-02 | — | N/A | unit | `cargo test -p twins-core --test hash_test cancel` | ✅ | ✅ green |
+| 1-xx | 01-01, 01-07 | 1, 4 | CORE-02 | — | exit 130 distinct from 1 and 2 | CLI | `cargo test -p twins-cli exit_code` | ✅ | ✅ green |
+| 1-xx | 01-01 | 1 | CORE-03 | — | report mode derived in core | integration (core) | `cargo test -p twins-core --test pipeline_test dry_run` | ✅ | ✅ green |
+| 1-xx | 01-04, 01-07 | 2, 4 | CORE-04 | — | N/A | CI | `cargo +1.90.0 test --workspace` (CI `msrv` job) | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -60,11 +60,11 @@ Task IDs are assigned when the plans are written. Until then, each row maps a re
 
 ## Wave 0 Requirements
 
-- [ ] `crates/twins-cli/tests/cli_test.rs` — full-structure JSON characterization (mask `scanned_at`; compare `roots` with a relative root, `keep`, `remove`, `files`, `summary`) and exact text-output characterization, committed and green before `run.rs` changes
-- [ ] `crates/twins-cli/tests/cli_test.rs` — `.code(2)` for `/System`, bad `--min-size`, bad `--exclude` (locks exit codes before the error-type change)
-- [ ] `crates/twins-core/tests/scan_test.rs` — walk cancellation with a pre-set flag
-- [ ] `crates/twins-core/tests/pipeline_test.rs`, `crates/twins-core/tests/observe_test.rs` — new files (reuse `fixtures/mod.rs` `Tree`, `mib`)
-- [ ] `.github/workflows/ci.yml` — `msrv` job on Rust 1.90
+- [x] `crates/twins-cli/tests/cli_test.rs` — full-structure JSON characterization (mask `scanned_at`; compare `roots` with a relative root, `keep`, `remove`, `files`, `summary`) and exact text-output characterization, committed and green before `run.rs` changes
+- [x] `crates/twins-cli/tests/cli_test.rs` — `.code(2)` for `/System`, bad `--min-size`, bad `--exclude` (locks exit codes before the error-type change)
+- [x] `crates/twins-core/tests/scan_test.rs` — walk cancellation with a pre-set flag
+- [x] `crates/twins-core/tests/pipeline_test.rs`, `crates/twins-core/tests/observe_test.rs` — new files (reuse `fixtures/mod.rs` `Tree`, `mib`)
+- [x] `.github/workflows/ci.yml` — `msrv` job on Rust 1.90
 
 Framework install: none needed.
 
@@ -82,11 +82,22 @@ Framework install: none needed.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** validated 2026-10-02 (validate-phase, autonomous run)
+
+
+## Validation Audit 2026-10-02
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Every mapped command was run on `main` after wave 4: all green (112 passed, 2 ignored workspace-wide). `cargo test -p twins-cli --test cli_test -- --ignored sigint` passes (2/2), and `cargo +1.90.0 test --workspace` passes (112/0). The manual-only rows remain for human UAT in a real terminal (also tracked as 01-03 D6 and 01-07 D7).
