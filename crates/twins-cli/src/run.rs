@@ -83,6 +83,11 @@ pub fn exit_code(err: &anyhow::Error) -> i32 {
     }
 }
 
+/// Whether `err` is a cancelled pipeline run (the user pressed Ctrl+C).
+pub fn is_cancelled(_err: &anyhow::Error) -> bool {
+    false
+}
+
 /// Adds context to a fatal error before printing it.
 pub fn describe(err: &anyhow::Error) -> String {
     err.chain()
@@ -112,5 +117,14 @@ mod tests {
     #[test]
     fn exit_code_maps_other_errors_to_1() {
         assert_eq!(exit_code(&anyhow::anyhow!("x")), 1);
+    }
+
+    #[test]
+    fn is_cancelled_detects_pipeline_cancellation() {
+        assert!(is_cancelled(&anyhow::Error::from(PipelineError::Cancelled)));
+        assert!(!is_cancelled(&anyhow::Error::from(PipelineError::from(
+            scan::ScanError::NoRoots
+        ))));
+        assert!(!is_cancelled(&anyhow::anyhow!("x")));
     }
 }
