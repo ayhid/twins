@@ -254,6 +254,43 @@ fn each_stage_starts_with_a_zero_done_marker() {
 }
 
 #[test]
+fn progress_done_rises_by_one_within_a_stage() {
+    // 32 identical pairs of one size: every file reaches both hash stages,
+    // and 8 workers race to report.
+    let contents: Vec<Vec<u8>> = (0..32u8).map(|i| vec![i; 64]).collect();
+    let mut entries = Vec::new();
+    for (i, c) in contents.iter().enumerate() {
+        entries.push((format!("p{i}a"), c.as_slice()));
+        entries.push((format!("p{i}b"), c.as_slice()));
+    }
+    let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+    let t = Tree::build(&refs);
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    let idx = index_of(&t, &names);
+    let seen = Mutex::new(Vec::<Progress>::new());
+    let opts = Options::default()
+        .workers(8)
+        .on_progress(Box::new(|p| seen.lock().unwrap().push(p)));
+
+    find(&idx, &opts).unwrap();
+    drop(opts);
+
+    let seen = seen.into_inner().unwrap();
+    for stage in [Stage::Partial, Stage::Full] {
+        let done: Vec<u64> = seen
+            .iter()
+            .filter(|p| p.stage == stage)
+            .map(|p| p.done)
+            .collect();
+        assert_eq!(
+            done,
+            (0..=64).collect::<Vec<u64>>(),
+            "{stage} done sequence"
+        );
+    }
+}
+
+#[test]
 fn empty_index_still_marks_hash_stages() {
     let seen = Mutex::new(Vec::<Progress>::new());
     let opts = Options::default()
