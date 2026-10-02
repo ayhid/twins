@@ -211,6 +211,7 @@ pub fn rfc3339(t: SystemTime) -> String {
 }
 
 /// Howard Hinnant's days-to-civil algorithm (proleptic Gregorian).
+#[allow(clippy::similar_names)] // doe/doy/yoe are the paper's names; clippy 1.90 flags them
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
