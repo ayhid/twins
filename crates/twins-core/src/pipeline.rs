@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use crate::group::{self, Action, FindError, Group, GroupError, Index, Keeper, Strategy};
 use crate::observe::{CancelToken, Event, Observer, Outcome, Stage};
 use crate::report::{self, Meta, Report};
+use crate::safety;
 use crate::scan::{self, ScanError, Stats};
 
 /// What kind of run produced a report. The report's dry-run flag is
@@ -80,7 +81,9 @@ impl ScanSpec {
         Self { strategy, ..self }
     }
 
-    /// Directory preferred by [`Strategy::InDir`].
+    /// Directory preferred by [`Strategy::InDir`], which requires one. A
+    /// relative path is resolved against the current directory when the
+    /// scan starts, like the roots, so it matches the walk's absolute paths.
     #[must_use]
     pub fn keep_dir(self, keep_dir: PathBuf) -> Self {
         Self {
@@ -166,6 +169,13 @@ pub enum PipelineError {
     /// [`FindError::Cancelled`].
     #[error(transparent)]
     Find(FindError),
+    /// [`Strategy::InDir`] was chosen without a keep directory.
+    #[error("keep strategy in-dir needs a directory to keep")]
+    MissingKeepDir,
+    /// The relative keep directory cannot be resolved because the current
+    /// directory is unavailable.
+    #[error("{0}: cannot resolve the keep directory")]
+    KeepDir(PathBuf),
     /// The cancel token was raised.
     #[error("scan cancelled")]
     Cancelled,
@@ -209,7 +219,9 @@ impl From<FindError> for PipelineError {
 /// # Errors
 /// [`PipelineError::Cancelled`] when `cancel` is raised before or during
 /// the run, [`PipelineError::Scan`] for invalid roots or exclusion globs,
-/// [`PipelineError::Find`] when the hashing pool cannot be built.
+/// [`PipelineError::MissingKeepDir`] or [`PipelineError::KeepDir`] when
+/// [`Strategy::InDir`] has no usable keep directory (checked before the
+/// walk), [`PipelineError::Find`] when the hashing pool cannot be built.
 pub fn scan(
     spec: &ScanSpec,
     observer: &dyn Observer,
@@ -231,6 +243,7 @@ fn run(
     cancel: &CancelToken,
 ) -> Result<ScanOutcome, PipelineError> {
     check(cancel)?;
+    let keeper = keeper(spec)?;
     let index = Index::new();
     let stats = walk_stage(spec, observer, cancel, &index)?;
     // `find` returns Ok on an empty index even when cancelled, so a cancel
@@ -244,7 +257,29 @@ fn run(
     });
     let (groups, find_errors) = hash_stages(spec, observer, cancel, &index)?;
     check(cancel)?;
-    Ok(plan(spec, &groups, stats, stats.errors + find_errors))
+    Ok(plan(
+        spec,
+        &keeper,
+        &groups,
+        stats,
+        stats.errors + find_errors,
+    ))
+}
+
+/// The keeper for this run. [`Strategy::InDir`] needs a keep directory,
+/// made absolute here: the walk absolutizes every root, so a relative
+/// directory would never match a file and the plan would silently fall
+/// back to the oldest copy.
+fn keeper(spec: &ScanSpec) -> Result<Keeper, PipelineError> {
+    if spec.strategy != Strategy::InDir {
+        return Ok(Keeper::new(spec.strategy, None));
+    }
+    let dir = spec
+        .keep_dir
+        .as_deref()
+        .ok_or(PipelineError::MissingKeepDir)?;
+    let abs = safety::absolutize(dir).ok_or_else(|| PipelineError::KeepDir(dir.to_path_buf()))?;
+    Ok(Keeper::new(Strategy::InDir, Some(abs)))
 }
 
 fn check(cancel: &CancelToken) -> Result<(), PipelineError> {
@@ -330,9 +365,14 @@ fn hash_stages(
     Ok((groups, errors.into_inner()))
 }
 
-fn plan(spec: &ScanSpec, groups: &[Group], stats: Stats, errors: u64) -> ScanOutcome {
-    let keeper = Keeper::new(spec.strategy, spec.keep_dir.clone());
-    let actions = group::plan(groups, &keeper);
+fn plan(
+    spec: &ScanSpec,
+    keeper: &Keeper,
+    groups: &[Group],
+    stats: Stats,
+    errors: u64,
+) -> ScanOutcome {
+    let actions = group::plan(groups, keeper);
     let meta = Meta {
         // The roots as the caller gave them, not the walk's absolute ones.
         roots: spec.walk_options().roots().to_vec(),

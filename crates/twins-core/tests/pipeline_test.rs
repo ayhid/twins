@@ -5,10 +5,12 @@ mod fixtures;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use fixtures::{Tree, mib};
+use twins_core::fsutil::FileMeta;
 use twins_core::group::{self, Index, Keeper, Strategy};
 use twins_core::observe::{CancelToken, Event, NoopObserver, Observer, Outcome, Stage};
 use twins_core::pipeline::{self, PipelineError, RunMode, ScanSpec};
@@ -472,4 +474,64 @@ fn walk_progress_counts_files_before_size_grouping() {
     );
     assert_eq!(counts.last().copied(), Some(outcome.stats().files));
     assert_eq!(outcome.stats().files, 5);
+}
+
+/// A duplicate pair where the oldest copy, `a.bin`, lies outside `keep/`.
+fn keep_dir_tree() -> Tree {
+    let one = mib(1);
+    let t = Tree::build(&[("a.bin", &one), ("keep/b.bin", &one)]);
+    fs::File::options()
+        .write(true)
+        .open(t.path("a.bin"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000))
+        .unwrap();
+    t
+}
+
+/// `path`, which must be absolute, spelled relative to the current directory.
+fn relative_to_cwd(path: &Path) -> PathBuf {
+    let cwd = std::env::current_dir().unwrap();
+    let mut rel: PathBuf = cwd.components().skip(1).map(|_| "..").collect();
+    rel.push(path.strip_prefix("/").unwrap());
+    rel
+}
+
+#[test]
+fn in_dir_keeps_the_copy_under_an_unnormalised_keep_dir() {
+    let t = keep_dir_tree();
+    let relative = relative_to_cwd(&t.path("keep"));
+    assert!(relative.is_relative());
+    let dotted = t.path("keep/../keep/.");
+
+    for dir in [relative, dotted] {
+        let s = spec(&t).strategy(Strategy::InDir).keep_dir(dir.clone());
+        let outcome = pipeline::scan(&s, &NoopObserver, &CancelToken::new()).unwrap();
+
+        let [action] = outcome.actions() else {
+            panic!("one group expected for {dir:?}");
+        };
+        assert_eq!(action.keep().path(), t.path("keep/b.bin"), "{dir:?}");
+        let removed: Vec<&Path> = action.remove().iter().map(FileMeta::path).collect();
+        assert_eq!(removed, vec![t.path("a.bin")], "{dir:?}");
+    }
+}
+
+#[test]
+fn in_dir_without_keep_dir_fails_before_the_walk() {
+    let t = keep_dir_tree();
+    let rec = Recorder::default();
+
+    let err = pipeline::scan(
+        &spec(&t).strategy(Strategy::InDir),
+        &rec,
+        &CancelToken::new(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, PipelineError::MissingKeepDir), "{err:?}");
+    assert!(!err.is_cancelled());
+    let events = rec.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(is_finished(&events[0], Outcome::Failed));
 }
