@@ -22,6 +22,13 @@ fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        // The terminal observer already cleared the progress line on
+        // `Finished`, and nothing reached stdout: the report is written only
+        // after the pipeline returns Ok.
+        Err(err) if run::is_cancelled(&err) => {
+            eprintln!("scan cancelled");
+            ExitCode::from(130)
+        }
         Err(err) => {
             eprintln!("twins: {}", run::describe(&err));
             ExitCode::from(u8::try_from(run::exit_code(&err)).unwrap_or(1))
