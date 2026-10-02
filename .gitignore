@@ -1,4 +1,3 @@
 target/
 .worktrees/
 .DS_Store
-.dev-workflow.metrics.jsonl

@@ -347,22 +347,6 @@ changes nothing. Speed, automation and polish all come second to this.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->
-
-## Project Skills
-
-| Skill | Description | Path |
-|-------|-------------|------|
-| dev-adr | Record an architecture decision as an ADR — draw out the options that were rejected and why, write the record, and freeze it. Use when a decision gets made mid-session, when the user types /dev-adr, or when asked why something is the way it is. | `.claude/skills/dev-adr/SKILL.md` |
-| dev-bug | Capture a bug as a tracker issue — investigate the likely code path, check for duplicates, draft the issue, and file it on approval. Use when the user types /dev-bug or describes something broken mid-session. | `.claude/skills/dev-bug/SKILL.md` |
-| dev-docs-init | Scaffold a greenfield project's documentation — create the context, architecture, domain, api, ux, operations, testing and security documents, then fill them a claim at a time, each line carrying the evidence that would show it false. Use when a new project has no documentation yet, when /dev-init reports greenfield, or when the user types /dev-docs-init. | `.claude/skills/dev-docs-init/SKILL.md` |
-| dev-done | Finish work on the current branch's tracker issue — verify acceptance criteria, run the project's checks, and on confirmation move the ticket to the configured done state with a summary comment. Use when the user says they are done or types /dev-done. | `.claude/skills/dev-done/SKILL.md` |
-| dev-ingest-docs | Absorb an existing codebase's documentation into a verified map — inventory the docs, extract what they claim with evidence, find contradictions, ask for arbitration where evidence cannot settle it, and emit a map. Runs in steps across sessions. Use when joining a brownfield project, when /dev-init reports one, or when asked to understand, onboard onto, or digest a codebase and its docs. | `.claude/skills/dev-ingest-docs/SKILL.md` |
-| dev-init | Set up the dev workflow in this project — pick the issue tracker, probe the repo, confirm the project, language, state ladder and check commands with the user, and write .dev-workflow.json. Use when /dev-task, /dev-bug or /dev-done reports missing config, or when the user types /dev-init. | `.claude/skills/dev-init/SKILL.md` |
-| dev-lint-rules | Turn a project's stated conventions into rules its linter can decide, each with the count of what it would flag today — and name the ones no linter can settle as a hook, a claim, or noise. Use before writing a conventions document, when a review keeps restating the same rule, or when the user types /dev-lint-rules. | `.claude/skills/dev-lint-rules/SKILL.md` |
-| dev-review | Review the current branch through three adversarial lenses — a blind pass that never sees the intent, an edge-case pass, and an acceptance audit — and report findings sorted into fix-the-code, fix-the-spec and out-of-scope. Use before opening a PR, when asked to review a branch, or when the user types /dev-review. | `.claude/skills/dev-review/SKILL.md` |
-| dev-standup | Report everything in flight across the project's repos — what merged recently, what is checked out, what has stopped moving, what is still open on the tracker, and the one thing waiting on you. Use when the user asks for a standup, what they were working on, what is in progress, what landed yesterday, or what to pick up next. | `.claude/skills/dev-standup/SKILL.md` |
-| dev-task | Start work on a tracker issue, or on a plain sentence describing what you want — file the issue if there is none, agree acceptance criteria, plan, move it to the in-progress state, create the branch or worktree, and implement with ticket-referencing commits. Use when the user starts work on a ticket, describes something they want built, or types /dev-task. | `.claude/skills/dev-task/SKILL.md` |
-| dev-tdd | Drive an agreed acceptance criterion through red/green/refactor — a test confirmed to fail for the intended reason before any production code, then the least code that passes it. Use when /dev-task hands off at implementation, or when the user types /dev-tdd. | `.claude/skills/dev-tdd/SKILL.md` |
 <!-- GSD:skills-end -->
 
 <!-- GSD:workflow-start source:GSD defaults -->
