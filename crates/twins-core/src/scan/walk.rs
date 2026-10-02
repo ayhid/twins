@@ -260,8 +260,11 @@ fn is_candidate(m: &FileMeta, opts: &Options) -> bool {
 }
 
 /// Makes roots absolute, validates them and drops any root nested inside
-/// another so files are visited once.
-fn normalise_roots(opts: &Options) -> Result<Vec<PathBuf>, ScanError> {
+/// another so files are visited once. The result is exactly the list of
+/// roots the walk descends, in walk order, each spelled as the walk names
+/// its files; `pipeline` maps the in-dir keep directory onto it, so the
+/// two must never diverge.
+pub(crate) fn normalise_roots(opts: &Options) -> Result<Vec<PathBuf>, ScanError> {
     if opts.roots.is_empty() {
         return Err(ScanError::NoRoots);
     }

@@ -86,8 +86,10 @@ impl ScanSpec {
     /// must be an existing directory inside one of the roots. When the scan
     /// starts it is resolved on disk (a relative path against the current
     /// directory, symlinks followed, letter case as stored) and re-expressed
-    /// in the spelling of the root that holds it, so `/private/tmp/x`, a
-    /// symlinked alias or a different case still match the walk's paths.
+    /// in the spelling of the walked root that holds it, so `/private/tmp/x`,
+    /// a symlinked alias or a different case still match the walk's paths. A
+    /// root nested in another is not walked on its own, so the keep
+    /// directory is mapped onto the outer root.
     #[must_use]
     pub fn keep_dir(self, keep_dir: PathBuf) -> Self {
         Self {
@@ -237,8 +239,9 @@ impl From<FindError> for PipelineError {
 /// the run, [`PipelineError::Scan`] for invalid roots or exclusion globs,
 /// [`PipelineError::MissingKeepDir`], [`PipelineError::KeepDir`] or
 /// [`PipelineError::KeepDirOutsideRoots`] when [`Strategy::InDir`] has no
-/// usable keep directory (checked before the walk; a root that cannot be
-/// resolved during that check fails with [`PipelineError::Scan`]),
+/// usable keep directory (checked before the walk, after the roots are
+/// validated; an invalid root, or one that cannot be resolved during that
+/// check, fails with [`PipelineError::Scan`]),
 /// [`PipelineError::Find`] when the hashing pool cannot be built.
 pub fn scan(
     spec: &ScanSpec,
@@ -286,14 +289,22 @@ fn run(
 
 /// The keeper for this run. [`Strategy::InDir`] matches the keep directory
 /// against walk paths component by component, and the walk names every file
-/// after its root as given, made absolute lexically. A keep directory spelled
-/// any other way (through a symlink, `/private/tmp` for `/tmp`, another
-/// letter case on a case-insensitive volume) would match no file, and the
-/// plan would silently keep the oldest copy instead. So both the keep
-/// directory and each root are resolved on disk, and the keep directory is
-/// rebuilt under the walk's spelling of the first root that holds it. A
-/// keep directory that cannot be resolved or lies outside every root fails
-/// the run before the walk.
+/// after the root it descends, made absolute lexically. A keep directory
+/// spelled any other way (through a symlink, `/private/tmp` for `/tmp`,
+/// another letter case on a case-insensitive volume) would match no file,
+/// and the plan would silently keep the oldest copy instead. So both the
+/// keep directory and each root are resolved on disk, and the keep
+/// directory is rebuilt under the walk's spelling of the first root that
+/// holds it.
+///
+/// The roots are the walk's own list from [`scan::normalise_roots`]:
+/// validated, sorted, with every root nested in another dropped. Mapping
+/// onto the roots as given would pick a nested root the walk never
+/// descends (`R/shortcut` or `R/KEEP` next to `R`), whose spelling the walk
+/// never produces. The same call also reports invalid roots as root errors
+/// before any keep directory error. A keep directory that cannot be
+/// resolved or lies outside every walked root fails the run before the
+/// walk.
 fn keeper(spec: &ScanSpec) -> Result<Keeper, PipelineError> {
     if spec.strategy != Strategy::InDir {
         return Ok(Keeper::new(spec.strategy, None));
@@ -302,6 +313,7 @@ fn keeper(spec: &ScanSpec) -> Result<Keeper, PipelineError> {
         .keep_dir
         .as_deref()
         .ok_or(PipelineError::MissingKeepDir)?;
+    let roots = scan::normalise_roots(spec.walk_options())?;
     let keep_err = |source| PipelineError::KeepDir {
         path: dir.to_path_buf(),
         source,
@@ -310,10 +322,7 @@ fn keeper(spec: &ScanSpec) -> Result<Keeper, PipelineError> {
     if !std::fs::metadata(&real).map_err(keep_err)?.is_dir() {
         return Err(keep_err(std::io::ErrorKind::NotADirectory.into()));
     }
-    for root in spec.walk_options().roots() {
-        // The walk's spelling of this root, as `scan` builds it.
-        let walked =
-            safety::absolutize(root).ok_or_else(|| ScanError::NotDirectory(root.clone()))?;
+    for walked in roots {
         // A root that cannot be resolved cannot be walked either: fail now
         // rather than risk planning with an unmatched keep directory.
         let real_root = std::fs::canonicalize(&walked).map_err(|source| {

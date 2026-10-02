@@ -672,6 +672,87 @@ fn in_dir_keeps_the_copy_under_a_keep_dir_in_the_second_root() {
     assert_eq!(action.keep().path(), link.join("keep/b.bin"));
 }
 
+/// Scans the roots in the order given with `keep_dir` and checks that the
+/// newer copy under `keep/` survives, named as the walk names it: after
+/// the tree's root, since a nested root is folded into the root above it.
+fn assert_nested_roots_keep_the_copy_under_keep(t: &Tree, roots: Vec<PathBuf>, keep_dir: &Path) {
+    let label = format!("roots {roots:?}, keep dir {}", keep_dir.display());
+    let s = ScanSpec::new(scan::Options::new(roots).home(t.root().into()))
+        .strategy(Strategy::InDir)
+        .keep_dir(keep_dir.into());
+    let outcome = pipeline::scan(&s, &NoopObserver, &CancelToken::new()).unwrap();
+
+    let [action] = outcome.actions() else {
+        panic!("one group expected for {label}");
+    };
+    assert_eq!(action.keep().path(), t.path("keep/b.bin"), "{label}");
+    let removed: Vec<&Path> = action.remove().iter().map(FileMeta::path).collect();
+    assert_eq!(removed, vec![t.path("a.bin")], "{label}");
+}
+
+#[test]
+fn in_dir_maps_the_keep_dir_past_a_nested_symlinked_root() {
+    let t = keep_dir_tree();
+    t.symlink("keep", "shortcut");
+    let shortcut = t.path("shortcut");
+
+    // The walk drops `shortcut` as nested in the root, whatever the order,
+    // and never follows the link: the files are named `root/keep/...`.
+    for roots in [
+        vec![shortcut.clone(), t.root().into()],
+        vec![t.root().into(), shortcut.clone()],
+    ] {
+        assert_nested_roots_keep_the_copy_under_keep(&t, roots, &shortcut);
+    }
+}
+
+#[test]
+fn in_dir_maps_the_keep_dir_past_a_nested_root_in_a_different_case() {
+    let t = keep_dir_tree();
+    let upper = t.path("KEEP");
+    if fs::metadata(&upper).is_err() {
+        // Case-sensitive volume: `KEEP` does not exist, nothing to test.
+        return;
+    }
+    for roots in [
+        vec![upper.clone(), t.root().into()],
+        vec![t.root().into(), upper.clone()],
+    ] {
+        assert_nested_roots_keep_the_copy_under_keep(&t, roots, &t.path("keep"));
+    }
+}
+
+#[test]
+fn in_dir_reports_root_errors_before_keep_dir_errors() {
+    let t = keep_dir_tree();
+    let keep = t.path("keep");
+    let run = |roots: Vec<PathBuf>| {
+        let rec = Recorder::default();
+        let s = ScanSpec::new(scan::Options::new(roots).home(t.root().into()))
+            .strategy(Strategy::InDir)
+            .keep_dir(keep.clone());
+        let err = pipeline::scan(&s, &rec, &CancelToken::new()).unwrap_err();
+        assert_failed_before_the_walk(&rec.events());
+        err
+    };
+
+    let err = run(Vec::new());
+    assert!(
+        matches!(err, PipelineError::Scan(scan::ScanError::NoRoots)),
+        "{err:?}"
+    );
+    let err = run(vec![PathBuf::from("/usr")]);
+    assert!(
+        matches!(err, PipelineError::Scan(scan::ScanError::ProtectedRoot(_))),
+        "{err:?}"
+    );
+    let err = run(vec![t.path("a.bin")]);
+    assert!(
+        matches!(err, PipelineError::Scan(scan::ScanError::NotDirectory(_))),
+        "{err:?}"
+    );
+}
+
 #[test]
 fn in_dir_fails_on_a_root_it_cannot_resolve() {
     let t = keep_dir_tree();
