@@ -15,6 +15,7 @@ path = "src/main.rs"
 twins-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+signal-hook.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true

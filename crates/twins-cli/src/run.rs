@@ -4,7 +4,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
+use signal_hook::consts::signal::SIGINT;
 use twins_core::human::parse_size;
 use twins_core::observe::{CancelToken, Throttle};
 use twins_core::pipeline::{self, PipelineError, ScanSpec};
@@ -32,6 +33,7 @@ pub fn scan(args: &ScanArgs, force_json: bool) -> Result<()> {
         .hash_workers(args.jobs)
         .verify(args.verify);
     let cancel = CancelToken::new();
+    install_sigint(&cancel)?;
     // Progress depends only on stderr being a terminal, never on --json (D-09).
     let observer = Throttle::new(
         TerminalObserver::stderr(std::io::stderr().is_terminal(), args.verbose),
@@ -50,6 +52,23 @@ pub fn scan(args: &ScanArgs, force_json: bool) -> Result<()> {
             eprintln!("{n} files could not be read (use --verbose to list them)");
         }
     }
+    Ok(())
+}
+
+/// Turns Ctrl+C into a cancel of `cancel`.
+///
+/// Both actions share the token's flag, and the order matters: the
+/// conditional shutdown is registered first. On the first SIGINT it finds
+/// the flag still false (so it does nothing), then the second action raises
+/// the flag and the pipeline stops at its next check. On a second SIGINT the
+/// flag is already true, so the shutdown action exits 130 at once without
+/// running at-exit hooks. That is the escape hatch for a read stuck on a slow
+/// volume, and it is safe because a scan writes nothing.
+fn install_sigint(cancel: &CancelToken) -> Result<()> {
+    signal_hook::flag::register_conditional_shutdown(SIGINT, 130, cancel.flag())
+        .context("cannot install the Ctrl+C handler")?;
+    signal_hook::flag::register(SIGINT, cancel.flag())
+        .context("cannot install the Ctrl+C handler")?;
     Ok(())
 }
 
@@ -84,8 +103,12 @@ pub fn exit_code(err: &anyhow::Error) -> i32 {
 }
 
 /// Whether `err` is a cancelled pipeline run (the user pressed Ctrl+C).
-pub fn is_cancelled(_err: &anyhow::Error) -> bool {
-    false
+///
+/// `main` checks this before the generic error path so a cancel prints
+/// `scan cancelled` and exits 130 instead of a `twins: ` error line.
+pub fn is_cancelled(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<PipelineError>()
+        .is_some_and(PipelineError::is_cancelled)
 }
 
 /// Adds context to a fatal error before printing it.
