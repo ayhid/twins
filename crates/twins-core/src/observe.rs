@@ -157,8 +157,18 @@ pub enum Event {
 
 /// Receives pipeline events.
 ///
-/// `on_event` is called from worker threads, possibly concurrently, so it
-/// must be cheap and must not block for long.
+/// `on_event` is called from the pipeline's worker threads. Only
+/// [`Event::FileSkipped`] may be delivered concurrently, from several
+/// workers at once; every other event is delivered by one thread at a
+/// time, and a stage's [`Event::Progress`] events arrive in order, with
+/// `done` never going down.
+///
+/// While hashing, only the worker delivering a `Progress` waits for
+/// `on_event`; the other workers keep hashing, so a slow observer delays
+/// what it displays rather than the scan. It should still be cheap: each
+/// stage waits for its last event, the walk and verify report from the
+/// thread doing the work, and an observer that never returns stalls the
+/// run.
 pub trait Observer: Send + Sync {
     /// Called for every event.
     fn on_event(&self, event: &Event);

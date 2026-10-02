@@ -5,6 +5,7 @@ mod fixtures;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use fixtures::{Tree, mib};
 use twins_core::fsutil::{self, FileMeta};
@@ -253,10 +254,9 @@ fn each_stage_starts_with_a_zero_done_marker() {
     assert!(first(Stage::Full) < first(Stage::Verify));
 }
 
-#[test]
-fn progress_done_rises_by_one_within_a_stage() {
-    // 32 identical pairs of one size: every file reaches both hash stages,
-    // and 8 workers race to report.
+/// 32 identical pairs of one size, 64 files in all: every file reaches
+/// both hash stages.
+fn same_size_pairs() -> (Tree, Index) {
     let contents: Vec<Vec<u8>> = (0..32u8).map(|i| vec![i; 64]).collect();
     let mut entries = Vec::new();
     for (i, c) in contents.iter().enumerate() {
@@ -267,6 +267,13 @@ fn progress_done_rises_by_one_within_a_stage() {
     let t = Tree::build(&refs);
     let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
     let idx = index_of(&t, &names);
+    (t, idx)
+}
+
+#[test]
+fn progress_done_rises_by_one_within_a_stage() {
+    // 8 workers race to report.
+    let (_t, idx) = same_size_pairs();
     let seen = Mutex::new(Vec::<Progress>::new());
     let opts = Options::default()
         .workers(8)
@@ -288,6 +295,62 @@ fn progress_done_rises_by_one_within_a_stage() {
             "{stage} done sequence"
         );
     }
+}
+
+/// Direct hasher that counts partial fingerprints.
+#[derive(Default)]
+struct CountingHasher {
+    partials: AtomicUsize,
+}
+
+impl Hasher for CountingHasher {
+    fn partial(&self, m: &FileMeta) -> Result<u64, HashError> {
+        self.partials.fetch_add(1, Ordering::SeqCst);
+        DirectHasher.partial(m)
+    }
+
+    fn full(&self, m: &FileMeta) -> Result<Digest, HashError> {
+        DirectHasher.full(m)
+    }
+}
+
+#[test]
+fn a_blocked_progress_callback_does_not_stall_the_other_workers() {
+    let (_t, idx) = same_size_pairs();
+    let hasher = Arc::new(CountingHasher::default());
+    let counted = Arc::clone(&hasher);
+    let partials_while_blocked = AtomicUsize::new(0);
+    let seen = Mutex::new(Vec::<u64>::new());
+    // Had the reporting worker held a lock the others need after every
+    // file, they could hash at most one more file each (3) while it waits.
+    let opts = Options::default()
+        .workers(4)
+        .hasher(hasher)
+        .on_progress(Box::new(|p| {
+            if p.stage != Stage::Partial {
+                return;
+            }
+            if p.done == 1 {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while counted.partials.load(Ordering::SeqCst) < 32 && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                partials_while_blocked
+                    .store(counted.partials.load(Ordering::SeqCst), Ordering::SeqCst);
+            }
+            seen.lock().unwrap().push(p.done);
+        }));
+
+    find(&idx, &opts).unwrap();
+    drop(opts);
+
+    let blocked = partials_while_blocked.into_inner();
+    assert!(
+        blocked >= 32,
+        "only {blocked} files hashed while the callback blocked"
+    );
+    // The counts held back while it blocked are still delivered, in order.
+    assert_eq!(seen.into_inner().unwrap(), (0..=64).collect::<Vec<u64>>());
 }
 
 #[test]

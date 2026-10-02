@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rayon::prelude::*;
 
@@ -49,7 +49,8 @@ impl fmt::Display for Stage {
 /// has nothing to do. Every later event of the stage has `done >= 1`, so a
 /// `done == 0` event unambiguously marks a stage start. Within a stage,
 /// `done` rises by exactly one per event, so the last event of a stage that
-/// ran to completion is `done == total`.
+/// ran to completion is `done == total`. Events are never delivered
+/// concurrently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
     /// Stage being run.
@@ -136,11 +137,20 @@ impl<'a> Options<'a> {
         Self { verify, ..self }
     }
 
-    /// Called from worker threads as each stage advances.
+    /// Called from worker threads as each stage advances, never concurrently
+    /// with itself.
     ///
     /// Each stage begins with exactly one call where `done == 0`, made from the
     /// calling thread before any worker event of that stage, even when the
     /// stage has nothing to do.
+    ///
+    /// While hashing, only the worker making the call waits for it: the
+    /// others keep hashing and leave their counts to that worker, which
+    /// reports them in order before it goes back to hashing. A slow
+    /// callback therefore delays the progress it reports, not the hashing,
+    /// although the stage still waits for its last call, and a callback
+    /// that never returns stalls it. Verify reports from the thread doing
+    /// the comparisons.
     #[must_use]
     pub fn on_progress(self, f: ProgressFn<'a>) -> Self {
         Self {
@@ -318,9 +328,7 @@ where
     let total = reps.len() as u64;
     // Stage-start marker, sent before any worker can report.
     opts.progress(stage, 0, total);
-    // Counting and reporting happen under one lock, so observers see `done`
-    // rise by one per event and the stage's last event is `(total, total)`.
-    let done = Mutex::new(0u64);
+    let ticker = Ticker::new(opts, stage, total);
     let results: Vec<Option<(Identity, Result<K, HashError>)>> = reps
         .par_iter()
         .map(|m| {
@@ -333,10 +341,7 @@ where
             if opts.cancelled() {
                 return None;
             }
-            let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
-            *n += 1;
-            opts.progress(stage, *n, total);
-            drop(n);
+            ticker.tick();
             Some((m.identity(), r))
         })
         .collect();
@@ -351,6 +356,67 @@ where
         }
     }
     Ok(keys)
+}
+
+/// Counts the files a stage has processed and reports every count once, in
+/// order, without making workers wait for the progress callback.
+///
+/// A worker bumps `done`, then tries to claim the reporting slot. The
+/// holder reports each count not yet reported, releases the slot and looks
+/// at `done` again: a count bumped while it was reporting may have found
+/// the slot taken, and that worker relies on the holder to report it. A
+/// worker that finds the slot taken goes straight back to hashing. Every
+/// access to `done` and `busy` is `SeqCst`, so a holder's look after its
+/// release cannot miss a bump whose claim saw the slot taken. When the
+/// parallel loop ends, every count up to `total` has been reported.
+struct Ticker<'o, 'a> {
+    opts: &'o Options<'a>,
+    stage: Stage,
+    total: u64,
+    /// Files processed so far.
+    done: AtomicU64,
+    /// Last count reported; only touched by the slot holder.
+    reported: AtomicU64,
+    /// Whether a worker holds the reporting slot.
+    busy: AtomicBool,
+}
+
+impl<'o, 'a> Ticker<'o, 'a> {
+    fn new(opts: &'o Options<'a>, stage: Stage, total: u64) -> Self {
+        Self {
+            opts,
+            stage,
+            total,
+            done: AtomicU64::new(0),
+            reported: AtomicU64::new(0),
+            busy: AtomicBool::new(false),
+        }
+    }
+
+    /// Counts one more file and reports what is pending, unless another
+    /// worker is already reporting.
+    fn tick(&self) {
+        self.done.fetch_add(1, Ordering::SeqCst);
+        loop {
+            if self
+                .busy
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return; // the holder reports this count
+            }
+            let mut n = self.reported.load(Ordering::Relaxed);
+            while n < self.done.load(Ordering::SeqCst) {
+                n += 1;
+                self.opts.progress(self.stage, n, self.total);
+            }
+            self.reported.store(n, Ordering::Relaxed);
+            self.busy.store(false, Ordering::SeqCst);
+            if self.done.load(Ordering::SeqCst) == n {
+                return;
+            }
+        }
+    }
 }
 
 /// Keeps only files byte-identical to the first one in the bucket.
