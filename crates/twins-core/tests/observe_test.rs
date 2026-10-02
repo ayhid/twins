@@ -181,6 +181,48 @@ fn throttle_zero_interval_forwards_everything() {
 }
 
 #[test]
+fn throttle_drops_progress_that_would_go_back() {
+    let throttle = Throttle::new(Recorder::default(), Duration::ZERO);
+    throttle.on_event(&progress(Stage::FullHash, 10, Some(10)));
+    throttle.on_event(&progress(Stage::FullHash, 5, Some(10)));
+    throttle.on_event(&progress(Stage::FullHash, 10, Some(10)));
+    throttle.on_event(&started(Stage::Verify, 5, 5));
+    throttle.on_event(&progress(Stage::Verify, 1, Some(2)));
+    assert_eq!(
+        progress_seen(&throttle.into_inner().events()),
+        vec![(Stage::FullHash, 10), (Stage::Verify, 1)]
+    );
+}
+
+#[test]
+fn throttle_keeps_concurrent_progress_in_order() {
+    const TOTAL: u64 = 2000;
+    const THREADS: u64 = 8;
+    for interval in [Duration::ZERO, HOUR] {
+        let throttle = Throttle::new(Recorder::default(), interval);
+        std::thread::scope(|s| {
+            for t in 0..THREADS {
+                let throttle = &throttle;
+                s.spawn(move || {
+                    for done in (1..=TOTAL).filter(|d| d % THREADS == t) {
+                        throttle.on_event(&progress(Stage::FullHash, done, Some(TOTAL)));
+                    }
+                });
+            }
+        });
+        let done: Vec<u64> = progress_seen(&throttle.into_inner().events())
+            .into_iter()
+            .map(|(_, d)| d)
+            .collect();
+        assert!(
+            done.windows(2).all(|w| w[0] < w[1]),
+            "{interval:?}: progress went back: {done:?}"
+        );
+        assert_eq!(done.last(), Some(&TOTAL), "{interval:?}: final not last");
+    }
+}
+
+#[test]
 fn throttled_observer_sees_the_same_stage_sequence() {
     let (one, two) = (mib(1), mib(2));
     let t = Tree::build(&[("a.bin", &one), ("sub/b.bin", &one), ("c.bin", &two)]);

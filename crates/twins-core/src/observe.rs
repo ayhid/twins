@@ -6,8 +6,8 @@
 //! never installs signal handlers.
 
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -187,36 +187,74 @@ impl Observer for NoopObserver {
 /// Forwards a [`Event::Progress`] only when at least `interval` has passed
 /// since the last one it forwarded, when it is the first `Progress` after a
 /// [`Event::StageStarted`], or when it completes its stage
-/// (`total == Some(done)`). Every other `Progress` is dropped.
+/// (`total == Some(done)`). Every other `Progress` is dropped, and so is a
+/// `Progress` whose `done` is not above that of the last one forwarded for
+/// the same stage: the inner observer never sees a stage go backwards, so a
+/// late `done == 5` cannot follow the stage's final event.
 ///
-/// It never drops or delays [`Event::StageStarted`], [`Event::FileSkipped`]
-/// or [`Event::Finished`], and never reorders the events it forwards. The
-/// check is lock-free (one atomic compare-and-swap), so hashing threads can
-/// call it for every file.
+/// It never drops [`Event::StageStarted`], [`Event::FileSkipped`] or
+/// [`Event::Finished`]. `Progress` and `StageStarted` are admitted and
+/// forwarded under one internal lock, so concurrent callers are
+/// serialized and the inner observer receives these events one at a time;
+/// a slow inner observer makes other threads' `Progress` wait. The pipeline
+/// delivers them one thread at a time anyway (see [`Observer`]), so there
+/// the lock is never contended. `FileSkipped` and `Finished` bypass it.
 #[derive(Debug)]
 pub struct Throttle<O> {
     inner: O,
     interval: Duration,
-    base: Instant,
-    /// Nanoseconds since `base` of the last forwarded `Progress`, or
-    /// [`OPEN`] when the next `Progress` must pass.
-    last: AtomicU64,
+    gate: Mutex<Gate>,
 }
 
-/// Sentinel for [`Throttle::last`]: the next `Progress` passes.
-const OPEN: u64 = u64::MAX;
+/// What [`Throttle`] remembers of the `Progress` it forwarded.
+#[derive(Debug, Default)]
+struct Gate {
+    /// When the last `Progress` was forwarded, or `None` when the next one
+    /// must pass.
+    last: Option<Instant>,
+    /// Stage and `done` of the last `Progress` forwarded since the last
+    /// `StageStarted`.
+    newest: Option<(Stage, u64)>,
+}
+
+impl Gate {
+    /// Whether a `Progress` may pass at `now`; records it when it does.
+    fn admit(
+        &mut self,
+        stage: Stage,
+        done: u64,
+        total: Option<u64>,
+        interval: Duration,
+        now: Instant,
+    ) -> bool {
+        if let Some((s, d)) = self.newest
+            && s == stage
+            && done <= d
+        {
+            return false; // stale or repeated
+        }
+        let due = self
+            .last
+            .is_none_or(|t| now.saturating_duration_since(t) >= interval);
+        if !due && total != Some(done) {
+            return false;
+        }
+        self.last = Some(now);
+        self.newest = Some((stage, done));
+        true
+    }
+}
 
 impl<O> Throttle<O> {
     /// Wraps `inner`, forwarding at most one `Progress` per `interval`
     /// besides the first and the final one of each stage. A zero interval
-    /// forwards everything.
+    /// forwards every `Progress` that moves its stage forward.
     #[must_use]
     pub fn new(inner: O, interval: Duration) -> Self {
         Self {
             inner,
             interval,
-            base: Instant::now(),
-            last: AtomicU64::new(OPEN),
+            gate: Mutex::new(Gate::default()),
         }
     }
 
@@ -231,25 +269,9 @@ impl<O> Throttle<O> {
         self.inner
     }
 
-    /// Nanoseconds elapsed since `base`, saturating at `u64::MAX - 1` so it
-    /// never collides with [`OPEN`].
-    fn now(&self) -> u64 {
-        u64::try_from(self.base.elapsed().as_nanos())
-            .unwrap_or(u64::MAX)
-            .min(OPEN - 1)
-    }
-
-    /// Whether a non-final `Progress` may pass now. Claims the slot with a
-    /// compare-and-swap so concurrent callers cannot both pass.
-    fn admit(&self) -> bool {
-        let now = self.now();
-        let prev = self.last.load(Ordering::Relaxed);
-        let interval = u64::try_from(self.interval.as_nanos()).unwrap_or(u64::MAX);
-        let due = prev == OPEN || now.saturating_sub(prev) >= interval;
-        due && self
-            .last
-            .compare_exchange(prev, now, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+    /// The gate, even if an inner observer panicked while holding it.
+    fn gate(&self) -> MutexGuard<'_, Gate> {
+        self.gate.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -257,17 +279,17 @@ impl<O: Observer> Observer for Throttle<O> {
     fn on_event(&self, event: &Event) {
         match event {
             Event::StageStarted { .. } => {
-                self.last.store(OPEN, Ordering::Relaxed);
+                let mut gate = self.gate();
+                *gate = Gate::default();
+                self.inner.on_event(event);
             }
-            Event::Progress { done, total, .. } => {
-                if *total == Some(*done) {
-                    self.last.store(self.now(), Ordering::Relaxed);
-                } else if !self.admit() {
-                    return;
+            Event::Progress { stage, done, total } => {
+                let mut gate = self.gate();
+                if gate.admit(*stage, *done, *total, self.interval, Instant::now()) {
+                    self.inner.on_event(event);
                 }
             }
-            _ => {}
+            _ => self.inner.on_event(event),
         }
-        self.inner.on_event(event);
     }
 }
