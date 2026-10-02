@@ -141,12 +141,77 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| CORE-01 | Phase 1 | Pending |
+| CORE-02 | Phase 1 | Pending |
+| CORE-03 | Phase 1 | Pending |
+| CORE-04 | Phase 1 | Pending |
+| SAFE-01 | Phase 2 | Pending |
+| SAFE-02 | Phase 2 | Pending |
+| SAFE-03 | Phase 2 | Pending |
+| SAFE-04 | Phase 2 | Pending |
+| SAFE-05 | Phase 2 | Pending |
+| SAFE-06 | Phase 2 | Pending |
+| SAFE-07 | Phase 2 | Pending |
+| DEL-01 | Phase 2 | Pending |
+| DEL-02 | Phase 2 | Pending |
+| DEL-03 | Phase 2 | Pending |
+| DEL-04 | Phase 2 | Pending |
+| DEL-05 | Phase 2 | Pending |
+| DEL-06 | Phase 2 | Pending |
+| DEL-07 | Phase 2 | Pending |
+| DEL-08 | Phase 2 | Pending |
+| DEL-09 | Phase 2 | Pending |
+| CLONE-01 | Phase 3 | Pending |
+| CLONE-02 | Phase 3 | Pending |
+| CLONE-03 | Phase 3 | Pending |
+| CLONE-04 | Phase 3 | Pending |
+| CACHE-01 | Phase 4 | Pending |
+| CACHE-02 | Phase 4 | Pending |
+| CACHE-03 | Phase 4 | Pending |
+| CONF-01 | Phase 4 | Pending |
+| CONF-02 | Phase 4 | Pending |
+| APP-01 | Phase 5 | Pending |
+| APP-02 | Phase 5 | Pending |
+| APP-03 | Phase 5 | Pending |
+| APP-04 | Phase 5 | Pending |
+| APP-05 | Phase 5 | Pending |
+| APP-06 | Phase 5 | Pending |
+| APP-07 | Phase 5 | Pending |
+| APP-08 | Phase 5 | Pending |
+| APP-09 | Phase 5 | Pending |
+| APP-10 | Phase 5 | Pending |
+| APP-11 | Phase 5 | Pending |
+| APP-12 | Phase 8 | Pending |
+| APP-13 | Phase 5 | Pending |
+| APP-14 | Phase 5 | Pending |
+| WFL-01 | Phase 6 | Pending |
+| WFL-02 | Phase 6 | Pending |
+| WFL-03 | Phase 7 | Pending |
+| WFL-04 | Phase 7 | Pending |
+| WFL-05 | Phase 6 | Pending |
+| WFL-06 | Phase 6 | Pending |
+| WFL-07 | Phase 8 | Pending |
+| WFL-08 | Phase 7 | Pending |
+| WFL-09 | Phase 7 | Pending |
+| AGENT-01 | Phase 8 | Pending |
+| AGENT-02 | Phase 8 | Pending |
+| AGENT-03 | Phase 8 | Pending |
+| AGENT-04 | Phase 8 | Pending |
+| AGENT-05 | Phase 8 | Pending |
+| AGENT-06 | Phase 8 | Pending |
+| REL-01 | Phase 9 | Pending |
+| REL-02 | Phase 9 | Pending |
+| REL-03 | Phase 9 | Pending |
+| REL-04 | Phase 9 | Pending |
+| PAR-01 | Phase 10 | Pending |
 
 **Coverage:**
 - v1 requirements: 63 total
-- Mapped to phases: 0
-- Unmapped: 63 ⚠️
+- Mapped to phases: 63
+- Unmapped: 0 ✓
+
+**Cross-phase surfaces:** SAFE-03 (protected folders) is enforced in core and exposed as `--protect` in Phase 2. Its config, app and workflow surfaces are checked in Phase 4 (CONF-01), Phase 5 (success criterion 3) and Phase 6 (WFL-01).
 
 ---
 *Requirements defined: 2026-10-02*
-*Last updated: 2026-10-02 after initial definition*
+*Last updated: 2026-10-02 after roadmap creation*
