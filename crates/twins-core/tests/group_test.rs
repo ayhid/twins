@@ -371,7 +371,7 @@ fn cancel_during_full_hash_is_not_reported_as_error() {
         }))
         .cancel(cancel)
         .on_error(Box::new(|p, _| {
-            errors.lock().unwrap().push(p.to_path_buf())
+            errors.lock().unwrap().push(p.to_path_buf());
         }));
 
     let r = find(&idx, &opts);
@@ -397,7 +397,7 @@ fn verify_stops_when_cancelled() {
             }
         }))
         .on_error(Box::new(|p, _| {
-            errors.lock().unwrap().push(p.to_path_buf())
+            errors.lock().unwrap().push(p.to_path_buf());
         }));
 
     let r = find(&idx, &opts);

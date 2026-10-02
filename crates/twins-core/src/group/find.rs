@@ -18,6 +18,9 @@ use crate::hash::{self, HashError};
 /// Hashing parallelism is capped: beyond this, SSDs saturate.
 const MAX_WORKERS: usize = 8;
 
+/// Stand-in cancel flag when none is configured; never raised.
+static NEVER: AtomicBool = AtomicBool::new(false);
+
 /// Pipeline step, for progress reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stage {
@@ -155,8 +158,10 @@ impl<'a> Options<'a> {
         }
     }
 
-    /// Flag polled between files; setting it aborts with
-    /// [`FindError::Cancelled`].
+    /// Flag polled between files and inside each full hash and byte
+    /// comparison (before every 256 KiB chunk); setting it aborts with
+    /// [`FindError::Cancelled`]. A file interrupted by the cancel is neither
+    /// reported through `on_error` nor given a digest.
     #[must_use]
     pub fn cancel(self, cancel: Arc<AtomicBool>) -> Self {
         Self {
@@ -175,9 +180,12 @@ impl<'a> Options<'a> {
     }
 
     fn cancelled(&self) -> bool {
-        self.cancel
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
+        self.cancel_flag().load(Ordering::Relaxed)
+    }
+
+    /// The configured cancel flag, or one that is never raised.
+    fn cancel_flag(&self) -> &AtomicBool {
+        self.cancel.as_deref().unwrap_or(&NEVER)
     }
 
     fn report(&self, path: &Path, err: &GroupError) {
@@ -213,7 +221,7 @@ fn find_in_pool(idx: &Index, opts: &Options<'_>) -> Result<Vec<Group>, FindError
         partial.into_iter().map(|b| b.files).collect(),
         opts,
         Stage::Full,
-        |m| opts.hasher.full(m),
+        |m| opts.hasher.full_cancellable(m, opts.cancel_flag()),
     )?;
     let total = full.len() as u64;
     if opts.verify {
@@ -226,6 +234,9 @@ fn find_in_pool(idx: &Index, opts: &Options<'_>) -> Result<Vec<Group>, FindError
         }
         let files = if opts.verify {
             let kept = verify(b.files, opts);
+            if opts.cancelled() {
+                return Err(FindError::Cancelled);
+            }
             opts.progress(Stage::Verify, i as u64 + 1, total);
             if physical(&kept) < 2 {
                 continue;
@@ -317,6 +328,11 @@ where
                 return None;
             }
             let r = key(m);
+            // A key interrupted by the cancel is dropped here, so it surfaces
+            // as `FindError::Cancelled` and is never reported as unreadable.
+            if opts.cancelled() {
+                return None;
+            }
             let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
             *n += 1;
             opts.progress(stage, *n, total);
@@ -338,6 +354,9 @@ where
 }
 
 /// Keeps only files byte-identical to the first one in the bucket.
+///
+/// Stops early, returning the files kept so far, once the cancel flag is
+/// raised; the caller must check [`Options::cancelled`] afterwards.
 fn verify(files: Vec<FileMeta>, opts: &Options<'_>) -> Vec<FileMeta> {
     let mut iter = files.into_iter();
     let Some(reference) = iter.next() else {
@@ -345,13 +364,17 @@ fn verify(files: Vec<FileMeta>, opts: &Options<'_>) -> Vec<FileMeta> {
     };
     let mut out = vec![reference.clone()];
     for f in iter {
+        if opts.cancelled() {
+            return out;
+        }
         if f.identity() == reference.identity() {
             out.push(f);
             continue;
         }
-        match hash::equal(reference.path(), f.path()) {
+        match hash::equal_cancellable(reference.path(), f.path(), opts.cancel_flag()) {
             Ok(true) => out.push(f),
             Ok(false) => opts.report(f.path(), &GroupError::HashCollision(f.path().to_path_buf())),
+            Err(_) if opts.cancelled() => return out,
             Err(e) => opts.report(f.path(), &GroupError::Hash(e)),
         }
     }
