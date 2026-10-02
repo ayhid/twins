@@ -1,6 +1,16 @@
-//! Tests for human-readable size formatting and parsing.
+//! Tests for human-readable size and count formatting, and size parsing.
 
-use twins_core::human::{human_size, parse_size};
+use twins_core::human::{group_digits, human_size, parse_size};
+
+#[test]
+fn group_digits_inserts_spaces_every_three_digits() {
+    assert_eq!(group_digits(0), "0");
+    assert_eq!(group_digits(999), "999");
+    assert_eq!(group_digits(1000), "1 000");
+    assert_eq!(group_digits(48_210), "48 210");
+    assert_eq!(group_digits(1_234_567), "1 234 567");
+    assert_eq!(group_digits(u64::MAX), "18 446 744 073 709 551 615");
+}
 
 #[test]
 fn human_size_uses_binary_units() {

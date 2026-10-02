@@ -58,3 +58,9 @@ fn multiplier(unit: &str) -> Option<u64> {
         _ => return None,
     })
 }
+
+/// Renders a count with its digits grouped. Placeholder: no grouping yet.
+#[must_use]
+pub fn group_digits(n: u64) -> String {
+    n.to_string()
+}
