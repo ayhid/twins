@@ -40,6 +40,11 @@ impl fmt::Display for Stage {
 }
 
 /// Snapshot of one stage's advancement.
+///
+/// Each stage begins with exactly one event where `done == 0`, sent from the
+/// calling thread before any worker event of that stage, even when the stage
+/// has nothing to do. Every later event of the stage has `done >= 1`, so a
+/// `done == 0` event unambiguously marks a stage start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
     /// Stage being run.
@@ -127,6 +132,10 @@ impl<'a> Options<'a> {
     }
 
     /// Called from worker threads as each stage advances.
+    ///
+    /// Each stage begins with exactly one call where `done == 0`, made from the
+    /// calling thread before any worker event of that stage, even when the
+    /// stage has nothing to do.
     #[must_use]
     pub fn on_progress(self, f: ProgressFn<'a>) -> Self {
         Self {
@@ -205,6 +214,9 @@ fn find_in_pool(idx: &Index, opts: &Options<'_>) -> Result<Vec<Group>, FindError
         |m| opts.hasher.full(m),
     )?;
     let total = full.len() as u64;
+    if opts.verify {
+        opts.progress(Stage::Verify, 0, total);
+    }
     let mut groups = Vec::with_capacity(full.len());
     for (i, b) in full.into_iter().enumerate() {
         if opts.cancelled() {
@@ -291,6 +303,8 @@ where
     F: Fn(&FileMeta) -> Result<K, HashError> + Sync,
 {
     let total = reps.len() as u64;
+    // Stage-start marker, sent before any worker can report.
+    opts.progress(stage, 0, total);
     let done = AtomicU64::new(0);
     let results: Vec<Option<(Identity, Result<K, HashError>)>> = reps
         .par_iter()
