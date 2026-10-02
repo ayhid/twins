@@ -298,9 +298,10 @@ fn usage_errors_exit_2_with_the_same_message() {
         .assert()
         .code(2)
         .stdout("")
-        .stderr(predicate::str::starts_with(
-            "twins: invalid exclude pattern \"[\": ",
-        ));
+        .stderr(
+            "twins: invalid exclude pattern \"[\": \
+             error parsing glob '[': unclosed character class; missing ']'\n",
+        );
 }
 
 #[test]

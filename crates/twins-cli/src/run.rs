@@ -112,12 +112,24 @@ pub fn is_cancelled(err: &anyhow::Error) -> bool {
         .is_some_and(PipelineError::is_cancelled)
 }
 
-/// Adds context to a fatal error before printing it.
+/// Adds context to a fatal error before printing it: every message of the
+/// chain, joined by `: `. Core errors such as `ScanError::Glob` and
+/// `FsError::Io` print their source and also expose it through `source()`,
+/// so a cause the message already ends with is skipped rather than printed
+/// twice.
 pub fn describe(err: &anyhow::Error) -> String {
-    err.chain()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(": ")
+    let mut out = String::new();
+    for cause in err.chain() {
+        let text = cause.to_string();
+        if out.ends_with(&text) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(": ");
+        }
+        out.push_str(&text);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -147,6 +159,24 @@ mod tests {
     #[test]
     fn exit_code_maps_other_errors_to_1() {
         assert_eq!(exit_code(&anyhow::anyhow!("x")), 1);
+    }
+
+    #[test]
+    fn describe_prints_a_source_shown_by_its_parent_once() {
+        let io = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let expected = format!("lstat /x: {io}");
+        let err = PipelineError::from(scan::ScanError::Io(twins_core::fsutil::FsError::Io {
+            op: "lstat",
+            path: PathBuf::from("/x"),
+            source: io,
+        }));
+        assert_eq!(describe(&anyhow::Error::from(err)), expected);
+    }
+
+    #[test]
+    fn describe_joins_context_and_cause() {
+        let err = anyhow::anyhow!("inner").context("outer");
+        assert_eq!(describe(&err), "outer: inner");
     }
 
     #[test]
