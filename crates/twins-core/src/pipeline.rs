@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use crate::fsutil::FsError;
 use crate::group::{self, Action, FindError, Group, GroupError, Index, Keeper, Strategy};
 use crate::observe::{CancelToken, Event, Observer, Outcome, Stage};
 use crate::report::{self, Meta, Report};
@@ -81,9 +82,12 @@ impl ScanSpec {
         Self { strategy, ..self }
     }
 
-    /// Directory preferred by [`Strategy::InDir`], which requires one. A
-    /// relative path is resolved against the current directory when the
-    /// scan starts, like the roots, so it matches the walk's absolute paths.
+    /// Directory preferred by [`Strategy::InDir`], which requires one. It
+    /// must be an existing directory inside one of the roots. When the scan
+    /// starts it is resolved on disk (a relative path against the current
+    /// directory, symlinks followed, letter case as stored) and re-expressed
+    /// in the spelling of the root that holds it, so `/private/tmp/x`, a
+    /// symlinked alias or a different case still match the walk's paths.
     #[must_use]
     pub fn keep_dir(self, keep_dir: PathBuf) -> Self {
         Self {
@@ -172,10 +176,22 @@ pub enum PipelineError {
     /// [`Strategy::InDir`] was chosen without a keep directory.
     #[error("keep strategy in-dir needs a directory to keep")]
     MissingKeepDir,
-    /// The relative keep directory cannot be resolved because the current
-    /// directory is unavailable.
-    #[error("{0}: cannot resolve the keep directory")]
-    KeepDir(PathBuf),
+    /// The keep directory cannot be resolved on disk: it does not exist
+    /// ([`std::io::ErrorKind::NotFound`]), is not a directory
+    /// ([`std::io::ErrorKind::NotADirectory`]), or cannot be reached.
+    #[error("{path}: cannot use as the keep directory: {source}")]
+    KeepDir {
+        /// The keep directory as the caller gave it.
+        path: PathBuf,
+        /// Why it cannot be resolved.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The keep directory lies outside every root, so no scanned file can
+    /// be in it and the strategy would silently fall back to the oldest
+    /// copy.
+    #[error("{0}: keep directory is not inside any scanned root")]
+    KeepDirOutsideRoots(PathBuf),
     /// The cancel token was raised.
     #[error("scan cancelled")]
     Cancelled,
@@ -219,9 +235,11 @@ impl From<FindError> for PipelineError {
 /// # Errors
 /// [`PipelineError::Cancelled`] when `cancel` is raised before or during
 /// the run, [`PipelineError::Scan`] for invalid roots or exclusion globs,
-/// [`PipelineError::MissingKeepDir`] or [`PipelineError::KeepDir`] when
-/// [`Strategy::InDir`] has no usable keep directory (checked before the
-/// walk), [`PipelineError::Find`] when the hashing pool cannot be built.
+/// [`PipelineError::MissingKeepDir`], [`PipelineError::KeepDir`] or
+/// [`PipelineError::KeepDirOutsideRoots`] when [`Strategy::InDir`] has no
+/// usable keep directory (checked before the walk; a root that cannot be
+/// resolved during that check fails with [`PipelineError::Scan`]),
+/// [`PipelineError::Find`] when the hashing pool cannot be built.
 pub fn scan(
     spec: &ScanSpec,
     observer: &dyn Observer,
@@ -266,10 +284,16 @@ fn run(
     ))
 }
 
-/// The keeper for this run. [`Strategy::InDir`] needs a keep directory,
-/// made absolute here: the walk absolutizes every root, so a relative
-/// directory would never match a file and the plan would silently fall
-/// back to the oldest copy.
+/// The keeper for this run. [`Strategy::InDir`] matches the keep directory
+/// against walk paths component by component, and the walk names every file
+/// after its root as given, made absolute lexically. A keep directory spelled
+/// any other way (through a symlink, `/private/tmp` for `/tmp`, another
+/// letter case on a case-insensitive volume) would match no file, and the
+/// plan would silently keep the oldest copy instead. So both the keep
+/// directory and each root are resolved on disk, and the keep directory is
+/// rebuilt under the walk's spelling of the first root that holds it. A
+/// keep directory that cannot be resolved or lies outside every root fails
+/// the run before the walk.
 fn keeper(spec: &ScanSpec) -> Result<Keeper, PipelineError> {
     if spec.strategy != Strategy::InDir {
         return Ok(Keeper::new(spec.strategy, None));
@@ -278,8 +302,41 @@ fn keeper(spec: &ScanSpec) -> Result<Keeper, PipelineError> {
         .keep_dir
         .as_deref()
         .ok_or(PipelineError::MissingKeepDir)?;
-    let abs = safety::absolutize(dir).ok_or_else(|| PipelineError::KeepDir(dir.to_path_buf()))?;
-    Ok(Keeper::new(Strategy::InDir, Some(abs)))
+    let keep_err = |source| PipelineError::KeepDir {
+        path: dir.to_path_buf(),
+        source,
+    };
+    let real = resolve(dir).map_err(keep_err)?;
+    if !std::fs::metadata(&real).map_err(keep_err)?.is_dir() {
+        return Err(keep_err(std::io::ErrorKind::NotADirectory.into()));
+    }
+    for root in spec.walk_options().roots() {
+        // The walk's spelling of this root, as `scan` builds it.
+        let walked =
+            safety::absolutize(root).ok_or_else(|| ScanError::NotDirectory(root.clone()))?;
+        // A root that cannot be resolved cannot be walked either: fail now
+        // rather than risk planning with an unmatched keep directory.
+        let real_root = std::fs::canonicalize(&walked).map_err(|source| {
+            ScanError::Io(FsError::Io {
+                op: "resolve",
+                path: walked.clone(),
+                source,
+            })
+        })?;
+        if let Ok(rest) = real.strip_prefix(&real_root) {
+            return Ok(Keeper::new(Strategy::InDir, Some(walked.join(rest))));
+        }
+    }
+    Err(PipelineError::KeepDirOutsideRoots(dir.to_path_buf()))
+}
+
+/// `path` resolved on disk: made absolute like the roots (`.` and `..`
+/// removed lexically), then every symlink followed and every component in
+/// its stored letter case.
+fn resolve(path: &Path) -> std::io::Result<PathBuf> {
+    let abs = safety::absolutize(path)
+        .ok_or_else(|| std::io::Error::other("the current directory is unavailable"))?;
+    std::fs::canonicalize(abs)
 }
 
 fn check(cancel: &CancelToken) -> Result<(), PipelineError> {

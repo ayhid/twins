@@ -1,6 +1,6 @@
 //! Runs a scan from parsed arguments and prints the report.
 
-use std::io::IsTerminal;
+use std::io::{ErrorKind, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -83,14 +83,21 @@ fn roots(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 }
 
 /// Exit code for a fatal error: 130 when cancelled, 2 for usage errors
-/// (bad roots, globs or sizes, or `in-dir` without a keep directory), 1
-/// otherwise.
+/// (bad roots, globs or sizes, or an `in-dir` keep directory that is
+/// missing, does not exist, is not a directory or lies outside every root),
+/// 1 otherwise.
 pub fn exit_code(err: &anyhow::Error) -> i32 {
     if let Some(e) = err.downcast_ref::<PipelineError>() {
         return match e {
             PipelineError::Cancelled => 130,
-            PipelineError::Scan(_) | PipelineError::MissingKeepDir => 2,
-            PipelineError::KeepDir(_) | PipelineError::Find(_) => 1,
+            PipelineError::Scan(_)
+            | PipelineError::MissingKeepDir
+            | PipelineError::KeepDirOutsideRoots(_) => 2,
+            PipelineError::KeepDir { source, .. } => match source.kind() {
+                ErrorKind::NotFound | ErrorKind::NotADirectory => 2,
+                _ => 1,
+            },
+            PipelineError::Find(_) => 1,
         };
     }
     if err
@@ -154,6 +161,30 @@ mod tests {
     fn exit_code_maps_missing_keep_dir_to_2() {
         let err = anyhow::Error::from(PipelineError::MissingKeepDir);
         assert_eq!(exit_code(&err), 2);
+    }
+
+    #[test]
+    fn exit_code_maps_unusable_keep_dirs_to_2() {
+        let keep_dir = |kind: ErrorKind| PipelineError::KeepDir {
+            path: PathBuf::from("/x"),
+            source: kind.into(),
+        };
+        for err in [
+            keep_dir(ErrorKind::NotFound),
+            keep_dir(ErrorKind::NotADirectory),
+            PipelineError::KeepDirOutsideRoots(PathBuf::from("/x")),
+        ] {
+            assert_eq!(exit_code(&anyhow::Error::from(err)), 2);
+        }
+    }
+
+    #[test]
+    fn exit_code_maps_an_unreachable_keep_dir_to_1() {
+        let err = PipelineError::KeepDir {
+            path: PathBuf::from("/x"),
+            source: ErrorKind::PermissionDenied.into(),
+        };
+        assert_eq!(exit_code(&anyhow::Error::from(err)), 1);
     }
 
     #[test]

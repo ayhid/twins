@@ -505,15 +505,78 @@ fn in_dir_keeps_the_copy_under_an_unnormalised_keep_dir() {
     let dotted = t.path("keep/../keep/.");
 
     for dir in [relative, dotted] {
-        let s = spec(&t).strategy(Strategy::InDir).keep_dir(dir.clone());
-        let outcome = pipeline::scan(&s, &NoopObserver, &CancelToken::new()).unwrap();
+        assert_keeps_the_copy_under_keep(t.root(), &dir);
+    }
+}
 
-        let [action] = outcome.actions() else {
-            panic!("one group expected for {dir:?}");
-        };
-        assert_eq!(action.keep().path(), t.path("keep/b.bin"), "{dir:?}");
-        let removed: Vec<&Path> = action.remove().iter().map(FileMeta::path).collect();
-        assert_eq!(removed, vec![t.path("a.bin")], "{dir:?}");
+/// Scans `root`, one spelling of a [`keep_dir_tree`]'s root, with
+/// `keep_dir`, and checks that the newer copy under `keep/` survives. The
+/// walk names files after `root` as given.
+fn assert_keeps_the_copy_under_keep(root: &Path, keep_dir: &Path) {
+    let s = ScanSpec::new(scan::Options::new(vec![root.into()]).home(root.into()))
+        .strategy(Strategy::InDir)
+        .keep_dir(keep_dir.into());
+    let outcome = pipeline::scan(&s, &NoopObserver, &CancelToken::new()).unwrap();
+
+    let label = format!("keep dir {}, root {}", keep_dir.display(), root.display());
+    let [action] = outcome.actions() else {
+        panic!("one group expected for {label}");
+    };
+    assert_eq!(action.keep().path(), root.join("keep/b.bin"), "{label}");
+    let removed: Vec<&Path> = action.remove().iter().map(FileMeta::path).collect();
+    assert_eq!(removed, vec![root.join("a.bin")], "{label}");
+}
+
+/// A fresh directory holding `alias`, a symlink to the tree's root, so the
+/// tree can be spelled through a link as well as directly. The directory
+/// must outlive the link.
+fn alias(t: &Tree) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("alias");
+    std::os::unix::fs::symlink(t.root(), &link).unwrap();
+    (dir, link)
+}
+
+#[test]
+fn in_dir_matches_a_keep_dir_spelled_differently_from_the_root() {
+    let t = keep_dir_tree();
+    let (_aliases, link) = alias(&t);
+    t.symlink("keep", "shortcut");
+    // The physical spelling: `/private/var/...` for a `/var/...` temp dir.
+    let real_keep = fs::canonicalize(t.path("keep")).unwrap();
+
+    // (root as given, keep dir); the walk names files after the root.
+    let cases = [
+        (link.clone(), t.path("keep")),
+        (link.clone(), real_keep.clone()),
+        (t.root().to_path_buf(), link.join("keep")),
+        (t.root().to_path_buf(), real_keep),
+        (t.root().to_path_buf(), t.path("shortcut")),
+    ];
+    for (root, keep_dir) in cases {
+        assert_keeps_the_copy_under_keep(&root, &keep_dir);
+    }
+}
+
+#[test]
+fn in_dir_matches_a_keep_dir_in_a_different_case() {
+    let t = keep_dir_tree();
+    let upper = t.path("KEEP");
+    if fs::metadata(&upper).is_ok() {
+        // Case-insensitive volume, the macOS default.
+        assert_keeps_the_copy_under_keep(t.root(), &upper);
+    } else {
+        // Case-sensitive volume: `KEEP` does not exist.
+        let err = pipeline::scan(
+            &spec(&t).strategy(Strategy::InDir).keep_dir(upper),
+            &NoopObserver,
+            &CancelToken::new(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, PipelineError::KeepDir { source, .. } if source.kind() == std::io::ErrorKind::NotFound),
+            "{err:?}"
+        );
     }
 }
 
@@ -534,4 +597,101 @@ fn in_dir_without_keep_dir_fails_before_the_walk() {
     let events = rec.events();
     assert_eq!(events.len(), 1, "{events:?}");
     assert!(is_finished(&events[0], Outcome::Failed));
+}
+
+/// Runs an in-dir scan of the tree with `keep_dir` and returns its error
+/// and events.
+fn in_dir_error(t: &Tree, keep_dir: PathBuf) -> (PipelineError, Vec<Event>) {
+    let rec = Recorder::default();
+    let err = pipeline::scan(
+        &spec(t).strategy(Strategy::InDir).keep_dir(keep_dir),
+        &rec,
+        &CancelToken::new(),
+    )
+    .unwrap_err();
+    (err, rec.events())
+}
+
+/// The run failed before the walk: `Finished` is its only event.
+fn assert_failed_before_the_walk(events: &[Event]) {
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(is_finished(&events[0], Outcome::Failed));
+}
+
+#[test]
+fn in_dir_rejects_a_keep_dir_outside_every_root() {
+    let t = keep_dir_tree();
+    let elsewhere = tempfile::tempdir().unwrap();
+    // A link inside the root to a directory outside it: the walk never
+    // follows it, so no scanned file can be in it.
+    std::os::unix::fs::symlink(elsewhere.path(), t.path("out")).unwrap();
+
+    for dir in [elsewhere.path().to_path_buf(), t.path("out")] {
+        let (err, events) = in_dir_error(&t, dir.clone());
+        assert!(
+            matches!(&err, PipelineError::KeepDirOutsideRoots(p) if *p == dir),
+            "{err:?}"
+        );
+        assert_failed_before_the_walk(&events);
+    }
+}
+
+#[test]
+fn in_dir_rejects_a_keep_dir_that_is_not_a_directory() {
+    let t = keep_dir_tree();
+    let cases = [
+        (t.path("missing"), std::io::ErrorKind::NotFound),
+        (t.path("a.bin"), std::io::ErrorKind::NotADirectory),
+    ];
+    for (dir, kind) in cases {
+        let (err, events) = in_dir_error(&t, dir.clone());
+        assert!(
+            matches!(&err, PipelineError::KeepDir { path, source } if *path == dir && source.kind() == kind),
+            "{err:?}"
+        );
+        assert_failed_before_the_walk(&events);
+    }
+}
+
+#[test]
+fn in_dir_keeps_the_copy_under_a_keep_dir_in_the_second_root() {
+    let t = keep_dir_tree();
+    let other = Tree::build(&[("c.bin", &mib(2))]);
+    let (_aliases, link) = alias(&t);
+    let s = ScanSpec::new(
+        scan::Options::new(vec![other.root().into(), link.clone()]).home(other.root().into()),
+    )
+    .strategy(Strategy::InDir)
+    .keep_dir(t.path("keep"));
+
+    let outcome = pipeline::scan(&s, &NoopObserver, &CancelToken::new()).unwrap();
+
+    let [action] = outcome.actions() else {
+        panic!("one group expected");
+    };
+    assert_eq!(action.keep().path(), link.join("keep/b.bin"));
+}
+
+#[test]
+fn in_dir_fails_on_a_root_it_cannot_resolve() {
+    let t = keep_dir_tree();
+    let missing = t.path("missing");
+    let rec = Recorder::default();
+    let s = ScanSpec::new(
+        scan::Options::new(vec![missing.clone(), t.root().into()]).home(t.root().into()),
+    )
+    .strategy(Strategy::InDir)
+    .keep_dir(t.path("keep"));
+
+    let err = pipeline::scan(&s, &rec, &CancelToken::new()).unwrap_err();
+
+    assert!(
+        matches!(&err, PipelineError::Scan(scan::ScanError::Io(_))),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains(&*missing.to_string_lossy()),
+        "{err}"
+    );
+    assert_failed_before_the_walk(&rec.events());
 }
