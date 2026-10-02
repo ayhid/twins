@@ -76,6 +76,12 @@ None yet.
 - [Phase 2]: Existing bug: `safety::is_protected` is lexical, so `/library` and `/Volumes/<boot>/Library` bypass it. Fix (identity-based, SAFE-01/02) before any deletion code lands
 - [Phase 2]: Largest phase (16 requirements). Research needed on trash threading, batch Put Back on macOS 26 and per-volume Trash
 
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| 01 | verification_deferred_human | /gsd-verify-work 01 |
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
