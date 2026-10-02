@@ -222,6 +222,65 @@ fn reports_progress_per_stage() {
 }
 
 #[test]
+fn each_stage_starts_with_a_zero_done_marker() {
+    let t = Tree::build(&[("a", b"abcd"), ("a2", b"abcd")]);
+    let idx = index_of(&t, &["a", "a2"]);
+    let seen = Mutex::new(Vec::<Progress>::new());
+    let opts = Options::default()
+        .verify(true)
+        .on_progress(Box::new(|p| seen.lock().unwrap().push(p)));
+
+    find(&idx, &opts).unwrap();
+    drop(opts);
+
+    let seen = seen.into_inner().unwrap();
+    let first = |stage: Stage| seen.iter().position(|p| p.stage == stage);
+    for stage in [Stage::Partial, Stage::Full, Stage::Verify] {
+        let i = first(stage).unwrap_or_else(|| panic!("no {stage} event"));
+        let marker = seen[i];
+        assert_eq!(marker.done, 0, "first {stage} event is not a marker");
+        let last = seen.iter().rfind(|p| p.stage == stage).unwrap();
+        assert_eq!(marker.total, last.total, "{stage} marker total");
+        assert_eq!(
+            seen.iter()
+                .filter(|p| p.stage == stage && p.done == 0)
+                .count(),
+            1,
+            "one {stage} marker"
+        );
+    }
+    assert!(first(Stage::Partial) < first(Stage::Full));
+    assert!(first(Stage::Full) < first(Stage::Verify));
+}
+
+#[test]
+fn empty_index_still_marks_hash_stages() {
+    let seen = Mutex::new(Vec::<Progress>::new());
+    let opts = Options::default()
+        .verify(true)
+        .on_progress(Box::new(|p| seen.lock().unwrap().push(p)));
+
+    let groups = find(&Index::new(), &opts).unwrap();
+    drop(opts);
+
+    assert!(groups.is_empty());
+    let seen: Vec<(Stage, u64, u64)> = seen
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.stage, p.done, p.total))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (Stage::Partial, 0, 0),
+            (Stage::Full, 0, 0),
+            (Stage::Verify, 0, 0)
+        ]
+    );
+}
+
+#[test]
 fn honours_cancellation() {
     let t = Tree::build(&[("a", b"abcd"), ("a2", b"abcd")]);
     let idx = index_of(&t, &["a", "a2"]);
