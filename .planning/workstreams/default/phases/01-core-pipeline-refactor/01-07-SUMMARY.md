@@ -212,3 +212,8 @@ None. No external service configuration is required.
 ---
 *Phase: 01-core-pipeline-refactor*
 *Completed: 2026-10-02*
+
+## Self-Check: PASSED
+
+- FOUND: crates/twins-cli/src/run.rs (install_sigint, is_cancelled), crates/twins-cli/src/main.rs (ExitCode::from(130)), crates/twins-cli/tests/cli_test.rs (both SIGINT tests)
+- FOUND commits: ba0c413, 707f32e, a5d9a3a
