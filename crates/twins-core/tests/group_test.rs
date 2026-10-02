@@ -326,6 +326,87 @@ fn honours_cancellation() {
     assert!(matches!(find(&idx, &opts), Err(FindError::Cancelled)));
 }
 
+/// Simulates a full hash interrupted mid-file: raises the shared cancel flag
+/// and fails the way `hash::full_cancellable` does when it sees the flag.
+struct CancellingHasher {
+    cancel: Arc<AtomicBool>,
+}
+
+impl CancellingHasher {
+    fn interrupted(&self, m: &FileMeta) -> HashError {
+        self.cancel.store(true, Ordering::SeqCst);
+        HashError {
+            op: "cancelled",
+            path: m.path().to_path_buf(),
+            source: std::io::Error::from(std::io::ErrorKind::Interrupted),
+        }
+    }
+}
+
+impl Hasher for CancellingHasher {
+    fn partial(&self, m: &FileMeta) -> Result<u64, HashError> {
+        DirectHasher.partial(m)
+    }
+
+    fn full(&self, m: &FileMeta) -> Result<Digest, HashError> {
+        Err(self.interrupted(m))
+    }
+
+    fn full_cancellable(&self, m: &FileMeta, _cancel: &AtomicBool) -> Result<Digest, HashError> {
+        Err(self.interrupted(m))
+    }
+}
+
+#[test]
+fn cancel_during_full_hash_is_not_reported_as_error() {
+    let t = Tree::build(&[("a", b"abcd"), ("a2", b"abcd")]);
+    let idx = index_of(&t, &["a", "a2"]);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let errors = Mutex::new(Vec::<PathBuf>::new());
+    // One worker, so the interrupted file is hashed first and deterministically.
+    let opts = Options::default()
+        .workers(1)
+        .hasher(Arc::new(CancellingHasher {
+            cancel: cancel.clone(),
+        }))
+        .cancel(cancel)
+        .on_error(Box::new(|p, _| {
+            errors.lock().unwrap().push(p.to_path_buf())
+        }));
+
+    let r = find(&idx, &opts);
+    drop(opts);
+
+    assert!(matches!(r, Err(FindError::Cancelled)), "{r:?}");
+    assert_eq!(errors.into_inner().unwrap(), Vec::<PathBuf>::new());
+}
+
+#[test]
+fn verify_stops_when_cancelled() {
+    let t = Tree::build(&[("a", b"abcd"), ("a2", b"abcd"), ("a3", b"abcd")]);
+    let idx = index_of(&t, &["a", "a2", "a3"]);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let raise = cancel.clone();
+    let errors = Mutex::new(Vec::<PathBuf>::new());
+    let opts = Options::default()
+        .verify(true)
+        .cancel(cancel)
+        .on_progress(Box::new(move |p| {
+            if p.stage == Stage::Verify && p.done == 0 {
+                raise.store(true, Ordering::SeqCst);
+            }
+        }))
+        .on_error(Box::new(|p, _| {
+            errors.lock().unwrap().push(p.to_path_buf())
+        }));
+
+    let r = find(&idx, &opts);
+    drop(opts);
+
+    assert!(matches!(r, Err(FindError::Cancelled)), "{r:?}");
+    assert_eq!(errors.into_inner().unwrap(), Vec::<PathBuf>::new());
+}
+
 #[test]
 fn index_is_safe_for_concurrent_add_and_drops_singletons() {
     let t = Tree::build(&[("a", b"abcd"), ("a2", b"abcd"), ("c", b"c")]);
