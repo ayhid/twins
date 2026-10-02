@@ -1,7 +1,9 @@
 //! Tests for partial / full hashing and byte comparison.
 
 use std::fs;
+use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 
 use twins_core::hash::{self, Digest};
 
@@ -93,4 +95,73 @@ fn missing_files_are_errors_carrying_the_path() {
     assert!(err.to_string().contains("nope"), "{err}");
     assert!(hash::partial(&nope, 10).is_err());
     assert!(hash::equal(&nope, &nope).is_err());
+}
+
+/// Larger than one 256 KiB chunk, so a cancel check sits before several reads.
+fn mib_of(byte: u8) -> Vec<u8> {
+    vec![byte; 1024 * 1024]
+}
+
+#[test]
+fn full_cancellable_stops_on_raised_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = write(&dir, "big", &mib_of(3));
+
+    let e = hash::full_cancellable(&p, &AtomicBool::new(true)).unwrap_err();
+
+    assert_eq!(e.op, "cancelled");
+    assert_eq!(e.source.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(e.path, p);
+}
+
+#[test]
+fn full_cancellable_matches_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = write(&dir, "big", &mib_of(5));
+    let empty = write(&dir, "empty", b"");
+    let never = AtomicBool::new(false);
+
+    assert_eq!(
+        hash::full_cancellable(&big, &never).unwrap(),
+        hash::full(&big).unwrap()
+    );
+    assert_eq!(
+        hash::full_cancellable(&empty, &never).unwrap(),
+        hash::full(&empty).unwrap()
+    );
+}
+
+#[test]
+fn equal_cancellable_stops_on_raised_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(&dir, "a", &mib_of(4));
+    let b = write(&dir, "b", &mib_of(4));
+
+    let e = hash::equal_cancellable(&a, &b, &AtomicBool::new(true)).unwrap_err();
+
+    assert_eq!(e.op, "cancelled");
+    assert_eq!(e.source.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(e.path, a);
+}
+
+#[test]
+fn equal_cancellable_matches_equal() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = write(&dir, "a", &mib_of(6));
+    let b = write(&dir, "b", &mib_of(6));
+    let mut other = mib_of(6);
+    *other.last_mut().unwrap() = 7;
+    let c = write(&dir, "c", &other);
+    let never = AtomicBool::new(false);
+
+    assert_eq!(
+        hash::equal_cancellable(&a, &b, &never).unwrap(),
+        hash::equal(&a, &b).unwrap()
+    );
+    assert!(hash::equal_cancellable(&a, &b, &never).unwrap());
+    assert_eq!(
+        hash::equal_cancellable(&a, &c, &never).unwrap(),
+        hash::equal(&a, &c).unwrap()
+    );
+    assert!(!hash::equal_cancellable(&a, &c, &never).unwrap());
 }

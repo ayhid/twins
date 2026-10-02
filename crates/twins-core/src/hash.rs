@@ -4,6 +4,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use xxhash_rust::xxh64::Xxh64;
 
@@ -137,6 +138,24 @@ pub fn equal(a: &Path, b: &Path) -> Result<bool, HashError> {
             return Ok(true);
         }
     }
+}
+
+/// Computes the BLAKE3 digest of the whole file, honouring a cancel flag.
+///
+/// # Errors
+/// [`HashError`] when the file cannot be opened or read.
+pub fn full_cancellable(path: &Path, cancel: &AtomicBool) -> Result<Digest, HashError> {
+    let _ = cancel; // RED stub: the flag is not polled yet.
+    full(path)
+}
+
+/// Compares two files byte by byte, honouring a cancel flag.
+///
+/// # Errors
+/// [`HashError`] when either file cannot be opened or read.
+pub fn equal_cancellable(a: &Path, b: &Path, cancel: &AtomicBool) -> Result<bool, HashError> {
+    let _ = cancel; // RED stub: the flag is not polled yet.
+    equal(a, b)
 }
 
 /// Fills `buf` as much as possible, stopping early only at end of file.
