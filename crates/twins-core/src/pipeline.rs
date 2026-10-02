@@ -278,19 +278,19 @@ fn walk_stage(
 ) -> Result<Stats, PipelineError> {
     started(observer, spec, Stage::Walk);
     let opts = spec.walk_options().clone().cancel(cancel.flag());
-    // One Progress per candidate; observers such as `Throttle` rate-limit it.
-    let walked = AtomicU64::new(0);
-    let stats = scan::walk(
+    // One Progress per file seen while listing directories, the slow part
+    // of the walk; observers such as `Throttle` rate-limit it.
+    let stats = scan::walk_observed(
         &opts,
-        |m| {
-            index.add(m);
+        |m| index.add(m),
+        |path, err| skipped(observer, path, err),
+        |s: &Stats| {
             observer.on_event(&Event::Progress {
                 stage: Stage::Walk,
-                done: walked.fetch_add(1, Ordering::Relaxed) + 1,
+                done: s.files,
                 total: None,
             });
         },
-        |path, err| skipped(observer, path, err),
     )?;
     Ok(stats)
 }

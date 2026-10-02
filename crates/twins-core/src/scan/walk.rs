@@ -79,6 +79,28 @@ where
     V: Fn(FileMeta) + Sync,
     E: Fn(&Path, &EntryError) + Sync,
 {
+    walk_observed(opts, visit, on_error, |_: &Stats| {})
+}
+
+/// Same as [`walk`], plus `on_progress`, which receives a snapshot of the
+/// counters each time a regular file is counted while directories are
+/// listed. It runs on the listing thread, never concurrently with itself.
+///
+/// # Errors
+/// [`ScanError`] for invalid roots, bad globs or cancellation. Unreadable
+/// entries are reported through `on_error` and counted in
+/// [`Stats::errors`].
+pub(crate) fn walk_observed<V, E, P>(
+    opts: &Options,
+    visit: V,
+    on_error: E,
+    on_progress: P,
+) -> Result<Stats, ScanError>
+where
+    V: Fn(FileMeta) + Sync,
+    E: Fn(&Path, &EntryError) + Sync,
+    P: Fn(&Stats) + Sync,
+{
     let roots = normalise_roots(opts)?;
     let rules = Rules::compile(opts)?;
     let counters = Counters::default();
@@ -100,14 +122,32 @@ where
         })?;
 
     for root in &roots {
-        let files = collect_files(root, opts, &rules, &counters, &report)?;
+        if cancelled(opts) {
+            return Err(ScanError::Cancelled);
+        }
+        let files = collect_files(root, opts, &rules, &counters, &report, &on_progress)?;
         pool.install(|| {
             files.par_iter().for_each(|path| {
+                // Without this poll a cancel raised after the listing would
+                // wait for every remaining file to be statted.
+                if cancelled(opts) {
+                    return;
+                }
                 handle_file(path, opts, &counters, &visit, &report);
             });
         });
+        if cancelled(opts) {
+            return Err(ScanError::Cancelled);
+        }
     }
     Ok(counters.snapshot())
+}
+
+/// Whether the caller raised the walk's cancel flag.
+fn cancelled(opts: &Options) -> bool {
+    opts.cancel
+        .as_ref()
+        .is_some_and(|c| c.load(Ordering::Relaxed))
 }
 
 /// Lists the regular files of one root, applying directory and file rules.
@@ -117,6 +157,7 @@ fn collect_files(
     rules: &Rules,
     counters: &Counters,
     report: &(impl Fn(&Path, EntryError) + Sync),
+    on_progress: &impl Fn(&Stats),
 ) -> Result<Vec<PathBuf>, ScanError> {
     let mut files = Vec::new();
     let volumes = VolumeCache::default();
@@ -135,11 +176,7 @@ fn collect_files(
             enter
         });
     for entry in iter {
-        if opts
-            .cancel
-            .as_ref()
-            .is_some_and(|c| c.load(Ordering::Relaxed))
-        {
+        if cancelled(opts) {
             return Err(ScanError::Cancelled);
         }
         let entry = match entry {
@@ -155,6 +192,7 @@ fn collect_files(
             Counters::bump(&counters.dirs);
         } else if ft.is_file() {
             Counters::bump(&counters.files);
+            on_progress(&counters.snapshot());
             if rules.skip_file(entry.path(), entry.file_name()) {
                 Counters::bump(&counters.skipped);
             } else {

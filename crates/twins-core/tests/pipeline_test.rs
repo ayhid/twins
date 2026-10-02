@@ -421,3 +421,55 @@ fn cancel_at_verify_returns_cancelled() {
     let t = pair_tree();
     assert_cancelled_at(&spec(&t).verify(true), Stage::Verify);
 }
+
+#[test]
+fn walk_progress_counts_files_before_size_grouping() {
+    // Five small files, all below the default minimum size: the walk sees
+    // them while listing even though none becomes a candidate.
+    let t = Tree::build(&[
+        ("a", b"1"),
+        ("b", b"22"),
+        ("sub/c", b"333"),
+        ("sub/d", b"4444"),
+        ("sub/deeper/e", b"55555"),
+    ]);
+    let rec = Recorder::default();
+    let outcome = pipeline::scan(&spec(&t), &rec, &CancelToken::new()).unwrap();
+    let events = rec.events();
+
+    let walk_start = events
+        .iter()
+        .position(|e| is_started(e, Stage::Walk))
+        .expect("walk starts");
+    let sizing = events
+        .iter()
+        .position(|e| is_started(e, Stage::SizeGrouping))
+        .expect("size grouping starts");
+    let walked: Vec<(usize, u64)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Event::Progress {
+                stage: Stage::Walk,
+                done,
+                total: None,
+            } => Some((i, *done)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(!walked.is_empty(), "no walk progress in {events:?}");
+    for &(i, done) in &walked {
+        assert!(
+            walk_start < i && i < sizing,
+            "walk progress {done} at {i} outside ({walk_start}, {sizing})"
+        );
+    }
+    let counts: Vec<u64> = walked.iter().map(|&(_, done)| done).collect();
+    assert!(
+        counts.windows(2).all(|w| w[0] <= w[1]),
+        "walk progress went backwards: {counts:?}"
+    );
+    assert_eq!(counts.last().copied(), Some(outcome.stats().files));
+    assert_eq!(outcome.stats().files, 5);
+}
