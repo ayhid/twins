@@ -42,11 +42,11 @@ Phase numbers are shared across workstreams so requirement IDs and phase directo
   4. The report's `meta.dry_run` is taken from the run's real mode instead of a hardcoded `false`, and a test fails if a dry-run report says otherwise
   5. The workspace builds and passes tests and clippy (pedantic) on Rust 1.90, with `rust-version` and CI raised to match
 
-**Plans:** 7 plans
+**Plans:** 1/7 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 01-01-PLAN.md — Tracer: `twins scan` runs through `twins_core::pipeline::scan` (characterization tests first), `meta.dry_run` derived from `RunMode` (wave 1)
+- [x] 01-01-PLAN.md — Tracer: `twins scan` runs through `twins_core::pipeline::scan` (characterization tests first), `meta.dry_run` derived from `RunMode` (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 01-02-PLAN.md — Hashing stages announce themselves; ordered `StageStarted` with step/steps; cancel at every stage (wave 2)
@@ -139,7 +139,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 6 → 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Core Pipeline Refactor | 0/7 | Planned | - |
+| 1. Core Pipeline Refactor | 1/7 | In Progress|  |
 | 2. Safe Deletion | 0/TBD | Not started | - |
 | 3. APFS Clone Mode | 0/TBD | Not started | - |
 | 4. Hash Cache and Config | 0/TBD | Not started | - |
