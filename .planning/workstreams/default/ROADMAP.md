@@ -1,34 +1,30 @@
-# Roadmap: twins
+# Roadmap: twins — engine and CLI (workstream `default`)
 
 ## Overview
 
-twins already scans and reports duplicates from a Rust workspace (step 1 of issue #1 is done and is
-not planned again). This roadmap takes it from a read-only scanner to a safe, automated macOS
-duplicate cleaner. The scan pipeline moves into `twins-core` first so every shell can watch and
-cancel it. Next comes the single deletion routine every later surface relies on: keep-one by
-identity, Trash by default, a write-ahead journal and undo. APFS clones, then the hash cache and
-config, finish the CLI. The Tauri + Svelte app follows and ends with a signed-bundle agent spike.
-After that come workflows, first as files run from the CLI, then built in the app, then run
-unattended by a background agent. The milestone closes with a signed, notarized Homebrew cask and a
-parity check against Go v0 (`9024929`). Through every phase the Core Value holds: never lose data.
+This workstream owns the engine and the CLI. twins already scans and reports duplicates from a Rust
+workspace (step 1 of issue #1 is done and is not planned again). The scan pipeline moves into
+`twins-core` first so every shell can watch and cancel it. Next comes the single deletion routine
+every later surface relies on: keep-one by identity, Trash by default, a write-ahead journal and
+undo. APFS clones, then the hash cache and config, finish the CLI. Workflows follow as TOML files
+run with `twins run`, and the stream closes with a parity check against Go v0 (`9024929`) on the
+released build. Through every phase the Core Value holds: never lose data.
+
+Phase numbers are shared across workstreams so requirement IDs and phase directories stay stable.
+
+## Cross-workstream dependencies
+
+| This stream needs | From | For |
+|---|---|---|
+| release Phase 9 | `release` | Phase 10 checks the released build |
 
 ## Phases
-
-**Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-
-Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Core Pipeline Refactor** - Scan orchestration lives in `twins-core`, any caller can watch progress and cancel, MSRV 1.90
 - [ ] **Phase 2: Safe Deletion** - `twins clean` removes duplicates to the Trash with keep-one by identity, protected folders, write-ahead journal, dry-run and undo
 - [ ] **Phase 3: APFS Clone Mode** - `twins clean --link` frees space by swapping duplicates for APFS clones, keeping every path
 - [ ] **Phase 4: Hash Cache and Config** - Unchanged folders rescan near-instantly and defaults live in `config.toml`
-- [ ] **Phase 5: Desktop App** - twins.app scans, browses, selects, cleans and restores through the core routine; ends with the signed agent spike
 - [ ] **Phase 6: Workflow Model and CLI Runner** - Workflows are TOML files run with `twins run`, report-only by default, auto-clean Trash-only within caps
-- [ ] **Phase 7: Workflow Builder UI** - Users create, preview, run and review workflows in the app with an ordered list editor
-- [ ] **Phase 8: Background Agent** - Scheduled and folder-change workflows run with the app closed, one at a time, with notifications and a menu bar item
-- [ ] **Phase 9: Signed Release** - Signed, notarized builds ship through semantic-release channels and a Homebrew cask
 - [ ] **Phase 10: Go v0 Parity** - Every documented Go v0 behaviour is checked against the Rust version and every gap is closed or recorded
 
 ## Phase Details
@@ -36,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ### Phase 1: Core Pipeline Refactor
 **Goal**: The scan pipeline runs inside `twins-core`, and any caller (CLI now, app and agent later) can follow its progress by stage and cancel it, on the Rust 1.90 toolchain Tauri needs
 **Mode:** mvp
-**Depends on**: Nothing (first phase; builds on the shipped step 1 of #1)
+**Depends on**: Nothing (first phase; builds on the completed step 1 of #1)
 **Requirements**: CORE-01, CORE-02, CORE-03, CORE-04
 **Success Criteria** (what must be TRUE):
   1. `twins scan` and `twins report` produce the same groups and the same JSON (schema v1) as before, with orchestration moved out of `twins-cli/src/run.rs` into `twins-core`, and the existing test suite passes
@@ -84,24 +80,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. `twins config show` prints the effective settings, `config path` prints where the file lives, `config init` writes a starter file and `config clear-cache` empties the hash cache
 **Plans**: TBD
 
-### Phase 5: Desktop App
-**Goal**: User can find, review and clean duplicates in twins.app with the same guarantees as the CLI, and the signed-bundle background agent approach is proven before workflows depend on it
-**Mode:** mvp
-**Depends on**: Phase 4
-**Requirements**: APP-01, APP-02, APP-03, APP-04, APP-05, APP-06, APP-07, APP-08, APP-09, APP-10, APP-11, APP-13, APP-14
-**Success Criteria** (what must be TRUE):
-  1. User reaches twins.app by opening it, by running bare `twins` (which prints help if the app is not installed), or by right-clicking a folder in Finder and choosing the twins Quick Action; they pick folders and start a scan, and if Full Disk Access is missing they are guided to grant it and see how many items were skipped
-  2. During a scan the user sees progress by stage and can cancel; afterwards a summary shows groups, duplicate files and reclaimable bytes, and the group list stays smooth with tens of thousands of groups, with sort and path filter
-  3. User chooses the keeper in each group and the UI cannot express a group with zero kept copies; they can auto-select every group with a keep strategy, adjust by hand, apply folder actions ("keep everything in this folder", "remove copies from this folder") across all groups, and mark protected folders whose files can never be selected for removal
-  4. Before anything is removed the user reviews a confirmation (files, bytes, mode); the clean runs through the same core routine as the CLI, then shows per-file results and errors, and any past run can be undone with "Restore this run"
-  5. Closing spike: a Developer ID-signed build registers a stub agent through `SMAppService` on real hardware, and the findings Phase 8 depends on are written down: whether the agent gets Full Disk Access, whether it can post a notification whose "Review" action opens the app, how it appears in Login Items, and whether the helper .app fallback is needed
-**Plans**: TBD
-**UI hint**: yes
-
 ### Phase 6: Workflow Model and CLI Runner
 **Goal**: User can define a workflow as a TOML file and run it from the CLI, where it only reports by default and an auto-clean outcome can only move files to the Trash, within caps
 **Mode:** mvp
-**Depends on**: Phase 2, Phase 4 (independent of the app; follows Phase 5 in execution order)
+**Depends on**: Phase 2, Phase 4 (independent of the app)
 **Requirements**: WFL-01, WFL-02, WFL-05, WFL-06
 **Success Criteria** (what must be TRUE):
   1. User writes a workflow file (paths, excludes, min size, file-type filters, protected folders, trigger, keep strategy, outcome); `twins workflow validate` accepts it or names each problem, and `twins workflow list` shows every workflow
@@ -110,49 +92,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Auto-clean falls back to report-only, and says why, when a run would exceed its caps (max files, max bytes, max share of scope) or when the workflow's scope or keep strategy changed since its last run
 **Plans**: TBD
 
-### Phase 7: Workflow Builder UI
-**Goal**: User can create, preview, run and review workflows in the app without touching files by hand
-**Mode:** mvp
-**Depends on**: Phase 5, Phase 6
-**Requirements**: WFL-03, WFL-04, WFL-08, WFL-09
-**Success Criteria** (what must be TRUE):
-  1. User creates and edits a workflow in an ordered list editor (trigger, scope, filters, keep, outcome), and the result is the same workflow file that `twins run` executes
-  2. User previews a workflow as a dry run from the editor and sees what it would report or move to the Trash, with nothing changed
-  3. User runs any workflow manually from the app and sees its outcome
-  4. User sees each workflow's run history (when, trigger, outcome, files, bytes, errors) in the app and from the CLI
-**Plans**: TBD
-**UI hint**: yes
-
-### Phase 8: Background Agent
-**Goal**: Scheduled and folder-change workflows run on their own while the app is closed, one at a time, and the user learns what they found
-**Mode:** mvp
-**Depends on**: Phase 7 (and the Phase 5 spike findings)
-**Requirements**: AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, WFL-07, APP-12
-**Success Criteria** (what must be TRUE):
-  1. User turns the background agent on or off from the app; with the app quit, a workflow scheduled daily or weekly runs at its time, and a run missed while the Mac was asleep catches up exactly once
-  2. A folder-change workflow runs after activity in the watched folder settles, ignores partial downloads, and is not retriggered by twins' own Trash moves
-  3. When several triggers fire together, runs are queued and execute one at a time, so two runs never act on the same files concurrently
-  4. After a run that found duplicates the user gets a notification whose "Review" action opens that run in the app, and a menu bar item shows agent status and the last run
-  5. User can enable or disable each workflow and pause all automation at once; when the agent cannot read a watched folder, the app says so and how to grant Full Disk Access
-**Plans**: TBD
-**UI hint**: yes
-
-### Phase 9: Signed Release
-**Goal**: User installs a signed, notarized twins with Homebrew, and every push produces a tested build on the right release channel
-**Mode:** mvp
-**Depends on**: Phase 8
-**Requirements**: REL-01, REL-02, REL-03, REL-04
-**Success Criteria** (what must be TRUE):
-  1. Every push runs tests, lints and a smoke test of the built bundle in CI
-  2. Every push to `main` publishes a beta prerelease, and fast-forwarding `stable` publishes a release through semantic-release
-  3. The app, CLI and agent binaries in a downloaded build are signed with Developer ID and hardened runtime and are notarized, so Gatekeeper opens them without warnings
-  4. `brew install --cask ayhid/tap/twins` (or `twins@beta`) installs the app and puts the `twins` CLI on the PATH, and uninstalling the cask unregisters the agent
-**Plans**: TBD
-
 ### Phase 10: Go v0 Parity
 **Goal**: The Rust twins is confirmed to do everything the Go v0 did, and every difference is a recorded, intended choice
 **Mode:** mvp
-**Depends on**: Phase 9 (checks the released build; the CLI behaviours under test are in place after Phase 4)
+**Depends on**: release Phase 9 (checks the released build; the CLI behaviours under test are in place after Phase 4)
 **Requirements**: PAR-01
 **Success Criteria** (what must be TRUE):
   1. Every behaviour in the Go v0 README at `9024929` (scan, clean, report, keep strategies, delete modes, dry-run, journal, cache, config) has a recorded Rust status: matches, gap closed, or intentionally different
@@ -164,7 +107,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 6 → 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -172,9 +115,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Safe Deletion | 0/TBD | Not started | - |
 | 3. APFS Clone Mode | 0/TBD | Not started | - |
 | 4. Hash Cache and Config | 0/TBD | Not started | - |
-| 5. Desktop App | 0/TBD | Not started | - |
 | 6. Workflow Model and CLI Runner | 0/TBD | Not started | - |
-| 7. Workflow Builder UI | 0/TBD | Not started | - |
-| 8. Background Agent | 0/TBD | Not started | - |
-| 9. Signed Release | 0/TBD | Not started | - |
 | 10. Go v0 Parity | 0/TBD | Not started | - |
