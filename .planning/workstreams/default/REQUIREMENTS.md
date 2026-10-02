@@ -10,9 +10,9 @@ The v1 requirements owned by this workstream. The full set of 63 is split across
 ### Core Foundation
 
 - [ ] **CORE-01**: The scan pipeline runs inside `twins-core` and reports staged progress to any caller (CLI, app, agent) through an observer
-- [ ] **CORE-02**: User can cancel a running scan or clean, and the operation stops promptly without leaving partial state
+- [x] **CORE-02**: User can cancel a running scan or clean, and the operation stops promptly without leaving partial state
 - [x] **CORE-03**: The JSON report's `dry_run` field reflects the real mode of the run instead of being hardcoded
-- [ ] **CORE-04**: The workspace builds on Rust 1.90 (the MSRV Tauri needs) with existing tests passing
+- [x] **CORE-04**: The workspace builds on Rust 1.90 (the MSRV Tauri needs) with existing tests passing
 
 ### Safety
 
@@ -102,9 +102,9 @@ Deferred. Tracked, but not in the current roadmap.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | CORE-01 | Phase 1 | Pending |
-| CORE-02 | Phase 1 | Pending |
+| CORE-02 | Phase 1 | Complete |
 | CORE-03 | Phase 1 | Complete |
-| CORE-04 | Phase 1 | Pending |
+| CORE-04 | Phase 1 | Complete |
 | SAFE-01 | Phase 2 | Pending |
 | SAFE-02 | Phase 2 | Pending |
 | SAFE-03 | Phase 2 | Pending |
