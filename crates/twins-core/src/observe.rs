@@ -170,3 +170,35 @@ pub struct NoopObserver;
 impl Observer for NoopObserver {
     fn on_event(&self, _event: &Event) {}
 }
+
+/// Rate-limiting wrapper around another observer. Placeholder: forwards
+/// every event unchanged.
+#[derive(Debug)]
+pub struct Throttle<O> {
+    inner: O,
+}
+
+impl<O> Throttle<O> {
+    /// Wraps `inner`.
+    #[must_use]
+    pub fn new(inner: O, _interval: std::time::Duration) -> Self {
+        Self { inner }
+    }
+
+    /// The wrapped observer.
+    #[must_use]
+    pub fn inner(&self) -> &O {
+        &self.inner
+    }
+
+    /// Unwraps the observer.
+    pub fn into_inner(self) -> O {
+        self.inner
+    }
+}
+
+impl<O: Observer> Observer for Throttle<O> {
+    fn on_event(&self, event: &Event) {
+        self.inner.on_event(event);
+    }
+}
