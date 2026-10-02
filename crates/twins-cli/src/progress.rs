@@ -8,18 +8,35 @@
 //! every skipped file is listed as `skip <path>: <reason>`.
 
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
+use twins_core::human::group_digits;
 use twins_core::observe::{Event, Observer, Stage};
 
-/// Renders one progress line. Placeholder: renders nothing yet.
+/// Returns to the start of the line and erases it.
+const CLEAR: &str = "\r\x1b[K";
+
+/// Renders one progress line: `[{step}/{steps}] {stage}`, then two spaces
+/// and the digit-grouped count once the stage reports progress. A count with
+/// no total reads `N files`, size grouping reads `N candidates`, and any
+/// other stage reads `done / total`.
 pub(crate) fn line(
-    _step: u8,
-    _steps: u8,
-    _stage: Stage,
-    _progress: Option<(u64, Option<u64>)>,
+    step: u8,
+    steps: u8,
+    stage: Stage,
+    progress: Option<(u64, Option<u64>)>,
 ) -> String {
-    String::new()
+    let head = format!("[{step}/{steps}] {stage}");
+    match progress {
+        None => head,
+        Some((done, None)) => format!("{head}  {} files", group_digits(done)),
+        Some((done, Some(_))) if stage == Stage::SizeGrouping => {
+            format!("{head}  {} candidates", group_digits(done))
+        }
+        Some((done, Some(total))) => {
+            format!("{head}  {} / {}", group_digits(done), group_digits(total))
+        }
+    }
 }
 
 /// Observer that draws the progress line and the verbose skip lines.
@@ -51,7 +68,42 @@ impl TerminalObserver<std::io::Stderr> {
 }
 
 impl<W: Write + Send> Observer for TerminalObserver<W> {
-    fn on_event(&self, _event: &Event) {}
+    fn on_event(&self, event: &Event) {
+        // Held for the whole event so lines from concurrent workers never
+        // interleave. Always taken before `current`.
+        let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
+        match event {
+            Event::StageStarted { stage, step, steps } => {
+                *self.current.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some((*step, *steps, *stage));
+                if self.progress {
+                    let _ = write!(out, "{CLEAR}{}", line(*step, *steps, *stage, None));
+                }
+            }
+            Event::Progress { stage, done, total } if self.progress => {
+                let current = *self.current.lock().unwrap_or_else(PoisonError::into_inner);
+                // A Progress before any StageStarted, or for a stage that has
+                // already ended, is ignored.
+                if let Some((step, steps, now)) = current
+                    && now == *stage
+                {
+                    let text = line(step, steps, now, Some((*done, *total)));
+                    let _ = write!(out, "{CLEAR}{text}");
+                }
+            }
+            Event::FileSkipped { path, reason } if self.verbose => {
+                if self.progress {
+                    let _ = write!(out, "{CLEAR}");
+                }
+                let _ = writeln!(out, "skip {path}: {reason}");
+            }
+            Event::Finished { .. } if self.progress => {
+                let _ = write!(out, "{CLEAR}");
+            }
+            _ => {}
+        }
+        let _ = out.flush();
+    }
 }
 
 #[cfg(test)]

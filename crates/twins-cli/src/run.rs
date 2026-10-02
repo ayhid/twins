@@ -1,17 +1,18 @@
 //! Runs a scan from parsed arguments and prints the report.
 
-use std::io::Write;
+use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Result, anyhow};
 use twins_core::human::parse_size;
-use twins_core::observe::{CancelToken, Event, Observer};
+use twins_core::observe::{CancelToken, Throttle};
 use twins_core::pipeline::{self, PipelineError, ScanSpec};
 use twins_core::report;
 use twins_core::scan;
 
 use crate::cli::ScanArgs;
+use crate::progress::TerminalObserver;
 
 /// Runs `scan` or `report`. `force_json` is set by `report`.
 pub fn scan(args: &ScanArgs, force_json: bool) -> Result<()> {
@@ -31,9 +32,11 @@ pub fn scan(args: &ScanArgs, force_json: bool) -> Result<()> {
         .hash_workers(args.jobs)
         .verify(args.verify);
     let cancel = CancelToken::new();
-    let observer = SkipPrinter {
-        verbose: args.verbose,
-    };
+    // Progress depends only on stderr being a terminal, never on --json (D-09).
+    let observer = Throttle::new(
+        TerminalObserver::stderr(std::io::stderr().is_terminal(), args.verbose),
+        Duration::from_millis(80),
+    );
     let outcome = pipeline::scan(&spec, &observer, &cancel)?;
 
     let r = outcome.report(SystemTime::now());
@@ -58,23 +61,6 @@ fn roots(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("HOME is not set; pass a directory to scan"))?;
     Ok(vec![home])
-}
-
-/// Lists skipped files on stderr with `--verbose`; ignores everything else.
-struct SkipPrinter {
-    verbose: bool,
-}
-
-impl Observer for SkipPrinter {
-    fn on_event(&self, event: &Event) {
-        match event {
-            Event::FileSkipped { path, reason } if self.verbose => {
-                let mut w = std::io::stderr().lock();
-                let _ = writeln!(w, "skip {path}: {reason}");
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Exit code for a fatal error: 130 when cancelled, 2 for usage errors
