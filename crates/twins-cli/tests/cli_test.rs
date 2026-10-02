@@ -357,3 +357,86 @@ fn json_stderr_is_silent_when_not_a_terminal() {
         .clone();
     serde_json::from_slice::<serde_json::Value>(&out).expect("stdout is JSON");
 }
+
+/// 32 identical 1 GiB sparse files of zeros. Every one is a candidate, so a
+/// scan has 32 GiB to hash; creating them is instant on APFS.
+fn big_sparse_tree() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..32 {
+        let f = fs::File::create(dir.path().join(format!("big{i:02}.bin"))).unwrap();
+        f.set_len(1 << 30).unwrap();
+    }
+    dir
+}
+
+/// Starts `twins scan --verify` on `dir` with piped stdout and stderr, and
+/// checks it is still running after 700 ms (so the SIGINT handler is
+/// installed and the scan is busy hashing).
+fn spawn_busy_scan(dir: &Path) -> std::process::Child {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_twins"))
+        .args(["scan", "--verify"])
+        .arg(dir)
+        .env_remove("TWINS_CONFIG")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("twins starts");
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        matches!(child.try_wait(), Ok(None)),
+        "the scan finished before the signal; grow the sparse tree"
+    );
+    child
+}
+
+fn send_sigint(child: &std::process::Child) -> std::process::ExitStatus {
+    std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill runs")
+}
+
+// Sends a real SIGINT, so it races the process (research Pitfall 8). Run by
+// hand or at the phase gate: cargo test -p twins-cli --test cli_test -- --ignored sigint
+#[test]
+#[ignore = "sends real signals; run by hand or at the phase gate"]
+fn sigint_cancels_scan_with_exit_130() {
+    let dir = big_sparse_tree();
+    let child = spawn_busy_scan(dir.path());
+    assert!(send_sigint(&child).success(), "kill -INT succeeds");
+    let sent = std::time::Instant::now();
+    let out = child.wait_with_output().unwrap();
+    let elapsed = sent.elapsed();
+
+    assert_eq!(out.status.code(), Some(130), "status: {:?}", out.status);
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "took {elapsed:?} to stop after SIGINT"
+    );
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "scan cancelled\n");
+}
+
+// Sends real signals, so it races the process (research Pitfall 8). Run by
+// hand or at the phase gate: cargo test -p twins-cli --test cli_test -- --ignored sigint
+#[test]
+#[ignore = "sends real signals; run by hand or at the phase gate"]
+fn double_sigint_exits_130_immediately() {
+    let dir = big_sparse_tree();
+    let child = spawn_busy_scan(dir.path());
+    assert!(send_sigint(&child).success(), "first kill -INT succeeds");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // The process may already be gone after the first signal.
+    let _ = send_sigint(&child);
+    let sent = std::time::Instant::now();
+    let out = child.wait_with_output().unwrap();
+    let elapsed = sent.elapsed();
+
+    // None would mean the default SIGINT action killed the process.
+    assert_eq!(out.status.code(), Some(130), "status: {:?}", out.status);
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "took {elapsed:?} to exit after the second SIGINT"
+    );
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+}
