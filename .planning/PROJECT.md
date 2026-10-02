@@ -31,7 +31,9 @@ changes nothing. Speed, automation and polish all come second to this.
 **Step 2: Safe deletion**
 - [ ] Keep-one invariant enforced and validated before any operation runs
 - [ ] Keep strategies `oldest`, `newest`, `shortest-path`, `in-dir` (+ keep dir, falling back to `oldest`)
-- [ ] Delete modes: trash via NSFileManager (Finder Put Back works), permanent (typed confirmation, `--force` for scripts), APFS clonefile link
+- [ ] Delete modes: trash via NSFileManager, permanent (typed confirmation, `--force` for scripts), APFS clonefile link
+- [ ] Journal-based undo (`twins undo <run>` and "Restore this run" in the app); Finder Put Back is best-effort only
+- [ ] Protected (reference) folders: nothing under them is ever removed
 - [ ] `--dry-run` that journals and changes nothing
 - [ ] Operations journal (JSON lines in `~/Library/Logs/twins/operations.log`)
 - [ ] `twins clean` command (interactive confirm, `--yes` for scripts)
@@ -52,7 +54,7 @@ changes nothing. Speed, automation and polish all come second to this.
 - [ ] Triggers: manual, schedule, folder change (FSEvents)
 - [ ] Per-workflow outcome: report-only (notify) or auto-clean (Trash + journal, using a keep strategy); report-only is the default
 - [ ] Workflows are saved as files and run from both the app and the CLI (`twins run <workflow>`)
-- [ ] Builder UI: node-graph canvas (n8n-style) as the model, with a simpler ordered rule-list view over it
+- [ ] Builder UI: ordered list editor in v1, over a graph-shaped model; the n8n-style canvas follows in v2
 - [ ] Scheduled and folder-change workflows run without the app open (background agent)
 
 **Step 5: Release**
@@ -70,6 +72,7 @@ changes nothing. Speed, automation and polish all come second to this.
 - Workflow rules that override the keep decision or the action per file — not requested; workflows control scope, triggers and report-only vs auto-clean, and reuse the standard keep strategies
 - Unattended permanent deletion — automation only ever trashes (Core Value)
 - Volume-mounted triggers — not needed for v1
+- Workflow graph canvas — v2, after the list editor proves the model
 - Network/remote volume dedup by default — still opt-in via `--include-remote`
 
 ## Context
@@ -95,7 +98,10 @@ changes nothing. Speed, automation and polish all come second to this.
 | Rewrite in Rust, Go kept only in history | Tauri needs a Rust core | ✓ Good (step 1 shipped) |
 | Tauri v2 + Svelte for the desktop app | Small bundle, Rust backend shares `twins-core` | — Pending |
 | Workflows control scope + trigger + report/auto-clean, not keep/action logic | User's stated need; keeps the safety surface small | — Pending |
-| Workflow builder: graph model with a list view on top | User wants n8n-style power plus a simpler view | — Pending |
+| Workflow builder: list editor in v1, graph canvas in v2 | Research: prove the constrained model with the list first | — Pending |
+| Undo via the journal, not Finder Put Back | Put Back is unreliable for batch trashing (Apple bug) | — Pending |
+| Protected folders in v1 | `in-dir` only prefers a folder; protection closes that gap | — Pending |
+| Bare `twins` opens the app | Desktop app is the main product | — Pending |
 | Workflows runnable from both app and CLI | Automation must work without the UI | — Pending |
 | Auto-clean is per workflow, report-only by default, Trash only | Core Value: never lose data | — Pending |
 | Order: deletion → cache/config → app → workflows → release | Each layer depends on the one before it | — Pending |
@@ -118,4 +124,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-02 after initialization*
+*Last updated: 2026-10-02 after requirements definition*
