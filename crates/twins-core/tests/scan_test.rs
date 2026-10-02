@@ -4,7 +4,8 @@ mod fixtures;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use fixtures::{Tree, mib};
 use twins_core::scan::{self, Options, ScanError};
@@ -165,4 +166,45 @@ fn unreadable_directories_are_reported_not_fatal() {
     let stats = stats.unwrap();
     assert_eq!(stats.errors, 1);
     assert_eq!(errors.into_inner().unwrap(), vec![locked]);
+}
+
+#[test]
+fn walk_cancelled_before_start() {
+    let t = tree();
+    let opts = Options::new(vec![t.root().to_path_buf()])
+        .home(t.root().to_path_buf())
+        .cancel(Arc::new(AtomicBool::new(true)));
+
+    assert!(matches!(
+        scan::walk(&opts, |_| {}, |_, _| {}),
+        Err(ScanError::Cancelled)
+    ));
+}
+
+#[test]
+fn walk_cancel_during_stat_phase_stops() {
+    const FILES: usize = 200;
+    let names: Vec<String> = (0..FILES).map(|i| format!("f{i:03}.bin")).collect();
+    let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), &b"x"[..])).collect();
+    let t = Tree::build(&entries);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let opts = Options::new(vec![t.root().to_path_buf()])
+        .home(t.root().to_path_buf())
+        .min_size(1)
+        .workers(2)
+        .cancel(Arc::clone(&cancel));
+    let visits = AtomicUsize::new(0);
+
+    let result = scan::walk(
+        &opts,
+        |_| {
+            visits.fetch_add(1, Ordering::Relaxed);
+            cancel.store(true, Ordering::Relaxed);
+        },
+        |_, _| {},
+    );
+
+    assert!(matches!(result, Err(ScanError::Cancelled)), "{result:?}");
+    let visits = visits.into_inner();
+    assert!(visits < FILES, "visit ran {visits} times after the cancel");
 }
