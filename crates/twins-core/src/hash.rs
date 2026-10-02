@@ -4,6 +4,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use xxhash_rust::xxh64::Xxh64;
 
@@ -105,10 +106,25 @@ pub fn partial(path: &Path, size: u64) -> Result<u64, HashError> {
 /// # Errors
 /// [`HashError`] when the file cannot be opened or read.
 pub fn full(path: &Path) -> Result<Digest, HashError> {
+    full_cancellable(path, &AtomicBool::new(false))
+}
+
+/// Computes the BLAKE3 digest of the whole file, polling `cancel` before
+/// every 256 KiB read so a cancel lands within one chunk, even in a huge file.
+///
+/// An interrupted read never yields a digest: once the flag is seen raised
+/// the only outcome is an error, so no digest of a file prefix can exist and
+/// a cache layered on top cannot store one.
+///
+/// # Errors
+/// [`HashError`] when the file cannot be opened or read, or, with op
+/// `cancelled` and [`io::ErrorKind::Interrupted`], when `cancel` is raised.
+pub fn full_cancellable(path: &Path, cancel: &AtomicBool) -> Result<Digest, HashError> {
     let mut f = File::open(path).map_err(err("open", path))?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = vec![0u8; BUFFER_SIZE];
     loop {
+        check_cancel(cancel, path)?;
         let n = f.read(&mut buf).map_err(err("read", path))?;
         if n == 0 {
             break;
@@ -123,11 +139,23 @@ pub fn full(path: &Path) -> Result<Digest, HashError> {
 /// # Errors
 /// [`HashError`] when either file cannot be opened or read.
 pub fn equal(a: &Path, b: &Path) -> Result<bool, HashError> {
+    equal_cancellable(a, b, &AtomicBool::new(false))
+}
+
+/// Compares two files byte by byte, polling `cancel` before every pair of
+/// 256 KiB reads. A cancelled comparison never answers `true` or `false`.
+///
+/// # Errors
+/// [`HashError`] when either file cannot be opened or read, or, with op
+/// `cancelled`, [`io::ErrorKind::Interrupted`] and path `a`, when `cancel`
+/// is raised.
+pub fn equal_cancellable(a: &Path, b: &Path, cancel: &AtomicBool) -> Result<bool, HashError> {
     let mut fa = File::open(a).map_err(err("open", a))?;
     let mut fb = File::open(b).map_err(err("open", b))?;
     let mut ba = vec![0u8; BUFFER_SIZE];
     let mut bb = vec![0u8; BUFFER_SIZE];
     loop {
+        check_cancel(cancel, a)?;
         let na = read_up_to(&mut fa, &mut ba).map_err(err("read", a))?;
         let nb = read_up_to(&mut fb, &mut bb).map_err(err("read", b))?;
         if na != nb || ba[..na] != bb[..nb] {
@@ -137,6 +165,19 @@ pub fn equal(a: &Path, b: &Path) -> Result<bool, HashError> {
             return Ok(true);
         }
     }
+}
+
+/// Fails with op `cancelled` and [`io::ErrorKind::Interrupted`] once `cancel`
+/// is raised.
+fn check_cancel(cancel: &AtomicBool, path: &Path) -> Result<(), HashError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(HashError {
+            op: "cancelled",
+            path: path.to_path_buf(),
+            source: io::Error::from(io::ErrorKind::Interrupted),
+        });
+    }
+    Ok(())
 }
 
 /// Fills `buf` as much as possible, stopping early only at end of file.
