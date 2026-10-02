@@ -1,15 +1,14 @@
 //! Runs a scan from parsed arguments and prints the report.
 
-use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::io::Write;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::{Result, anyhow};
-use twins_core::group::{self, Index, Keeper, Strategy};
 use twins_core::human::parse_size;
-use twins_core::report::{self, Meta};
+use twins_core::observe::{CancelToken, Event, Observer};
+use twins_core::pipeline::{self, PipelineError, ScanSpec};
+use twins_core::report;
 use twins_core::scan;
 
 use crate::cli::ScanArgs;
@@ -19,7 +18,7 @@ pub fn scan(args: &ScanArgs, force_json: bool) -> Result<()> {
     let json = args.json || force_json;
     let roots = roots(&args.paths)?;
     let min_size = parse_size(&args.min_size)?;
-    let opts = scan::Options::new(roots.clone())
+    let opts = scan::Options::new(roots)
         .min_size(min_size)
         .include_empty(args.include_empty)
         .include_library(args.include_library)
@@ -27,48 +26,23 @@ pub fn scan(args: &ScanArgs, force_json: bool) -> Result<()> {
         .include_remote(args.include_remote)
         .exclude(args.exclude.clone())
         .workers(args.jobs);
-
-    let stderr = Mutex::new(std::io::stderr());
-    let progress = Progress::new(!json && std::io::stderr().is_terminal());
-    let idx = Index::new();
-    let stats = scan::walk(
-        &opts,
-        |m| {
-            idx.add(m);
-            progress.tick("walk", None);
-        },
-        |path, err| skip(&stderr, args.verbose, path, err),
-    )?;
-
-    let errors = AtomicU64::new(stats.errors);
-    let find_opts = group::Options::default()
-        .workers(args.jobs)
-        .verify(args.verify)
-        .on_progress(Box::new(|p| progress.stage(p)))
-        .on_error(Box::new(|path, err| {
-            errors.fetch_add(1, Ordering::Relaxed);
-            skip(&stderr, args.verbose, path, err);
-        }));
-    let groups = group::find(&idx, &find_opts)?;
-    drop(find_opts);
-    progress.finish();
-
-    let keeper = Keeper::new(Strategy::default(), None);
-    let actions = group::plan(&groups, &keeper);
-    let meta = Meta {
-        roots,
-        files: stats.files,
-        candidates: stats.candidates,
-        strategy: keeper.strategy(),
-        dry_run: false,
+    // `--jobs` drives both the stat pool and the hashing pool.
+    let spec = ScanSpec::new(opts)
+        .hash_workers(args.jobs)
+        .verify(args.verify);
+    let cancel = CancelToken::new();
+    let observer = SkipPrinter {
+        verbose: args.verbose,
     };
-    let r = report::build(&actions, &meta, SystemTime::now());
+    let outcome = pipeline::scan(&spec, &observer, &cancel)?;
+
+    let r = outcome.report(SystemTime::now());
     let mut out = std::io::stdout().lock();
     if json {
         report::write_json(&mut out, &r)?;
     } else {
         report::write_text(&mut out, &r)?;
-        let n = errors.load(Ordering::Relaxed);
+        let n = outcome.errors();
         if n > 0 && !args.verbose {
             eprintln!("{n} files could not be read (use --verbose to list them)");
         }
@@ -86,67 +60,36 @@ fn roots(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(vec![home])
 }
 
-fn skip(stderr: &Mutex<std::io::Stderr>, verbose: bool, path: &Path, err: &dyn std::fmt::Display) {
-    if !verbose {
-        return;
-    }
-    if let Ok(mut w) = stderr.lock() {
-        let _ = writeln!(w, "skip {}: {err}", path.display());
-    }
+/// Lists skipped files on stderr with `--verbose`; ignores everything else.
+struct SkipPrinter {
+    verbose: bool,
 }
 
-/// Single-line progress on stderr, only when it is a terminal.
-struct Progress {
-    enabled: bool,
-    walked: AtomicU64,
-}
-
-impl Progress {
-    fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            walked: AtomicU64::new(0),
-        }
-    }
-
-    fn tick(&self, phase: &str, total: Option<u64>) {
-        let n = self.walked.fetch_add(1, Ordering::Relaxed) + 1;
-        if self.enabled && n % 256 == 0 {
-            Self::line(phase, n, total);
-        }
-    }
-
-    fn stage(&self, p: group::Progress) {
-        if self.enabled && (p.done % 16 == 0 || p.done == p.total) {
-            Self::line(&p.stage.to_string(), p.done, Some(p.total));
-        }
-    }
-
-    fn line(phase: &str, done: u64, total: Option<u64>) {
-        let mut w = std::io::stderr().lock();
-        let _ = match total {
-            Some(t) => write!(w, "\r\x1b[K{phase}: {done}/{t}"),
-            None => write!(w, "\r\x1b[K{phase}: {done} files"),
-        };
-        let _ = w.flush();
-    }
-
-    fn finish(&self) {
-        if self.enabled {
-            let mut w = std::io::stderr().lock();
-            let _ = write!(w, "\r\x1b[K");
-            let _ = w.flush();
+impl Observer for SkipPrinter {
+    fn on_event(&self, event: &Event) {
+        match event {
+            Event::FileSkipped { path, reason } if self.verbose => {
+                let mut w = std::io::stderr().lock();
+                let _ = writeln!(w, "skip {path}: {reason}");
+            }
+            _ => {}
         }
     }
 }
 
-/// Maps core errors to a usage-style message; kept for symmetry with the
-/// Go implementation's exit codes.
+/// Exit code for a fatal error: 130 when cancelled, 2 for usage errors
+/// (bad roots, globs or sizes), 1 otherwise.
 pub fn exit_code(err: &anyhow::Error) -> i32 {
-    if err.downcast_ref::<scan::ScanError>().is_some()
-        || err
-            .downcast_ref::<twins_core::human::ParseSizeError>()
-            .is_some()
+    if let Some(e) = err.downcast_ref::<PipelineError>() {
+        return match e {
+            PipelineError::Cancelled => 130,
+            PipelineError::Scan(_) => 2,
+            PipelineError::Find(_) => 1,
+        };
+    }
+    if err
+        .downcast_ref::<twins_core::human::ParseSizeError>()
+        .is_some()
     {
         2
     } else {
@@ -160,4 +103,28 @@ pub fn describe(err: &anyhow::Error) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(": ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_code_maps_cancel_to_130() {
+        assert_eq!(
+            exit_code(&anyhow::Error::from(PipelineError::Cancelled)),
+            130
+        );
+    }
+
+    #[test]
+    fn exit_code_maps_scan_errors_to_2() {
+        let err = PipelineError::from(scan::ScanError::NoRoots);
+        assert_eq!(exit_code(&anyhow::Error::from(err)), 2);
+    }
+
+    #[test]
+    fn exit_code_maps_other_errors_to_1() {
+        assert_eq!(exit_code(&anyhow::anyhow!("x")), 1);
+    }
 }

@@ -156,3 +156,188 @@ fn protected_root_and_bad_flags_fail_with_a_message() {
         .failure()
         .stderr(predicate::str::contains("invalid exclude pattern"));
 }
+
+// Characterization tests: they lock the exact output of `scan` and `report`
+// so moving the orchestration into twins-core cannot change it silently.
+
+fn file_entry(path: &Path) -> serde_json::Value {
+    use std::os::unix::fs::MetadataExt;
+    let md = fs::metadata(path).unwrap();
+    serde_json::json!({
+        "path": path.to_string_lossy(),
+        "inode": md.ino(),
+        "mtime": twins_core::report::rfc3339(md.modified().unwrap()),
+    })
+}
+
+fn is_rfc3339_utc(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 20
+        && b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            19 => *c == b'Z',
+            _ => c.is_ascii_digit(),
+        })
+}
+
+#[test]
+fn characterize_json_report_with_relative_root() {
+    let dir = fixture();
+    // The walk absolutizes a relative root against the process cwd, which
+    // macOS reports through /private/var while tempdir() returns /var.
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let out = twins()
+        .current_dir(dir.path())
+        .args(["scan", "--json", "--exclude", "*.log", "."])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let raw = String::from_utf8(out).unwrap();
+
+    let keys = [
+        "version",
+        "scanned_at",
+        "roots",
+        "keep_strategy",
+        "dry_run",
+        "summary",
+        "groups",
+    ];
+    let positions: Vec<usize> = keys
+        .iter()
+        .map(|k| {
+            raw.find(&format!("\n  \"{k}\":"))
+                .unwrap_or_else(|| panic!("top-level key {k} missing"))
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "top-level keys out of order: {positions:?}"
+    );
+
+    let mut json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let scanned_at = json
+        .as_object_mut()
+        .unwrap()
+        .remove("scanned_at")
+        .expect("scanned_at present");
+    assert!(
+        is_rfc3339_utc(scanned_at.as_str().unwrap()),
+        "scanned_at {scanned_at} is not YYYY-MM-DDTHH:MM:SSZ"
+    );
+
+    let p = |rel: &str| base.join(rel);
+    let expected = serde_json::json!({
+        "version": 1,
+        "roots": ["."],
+        "keep_strategy": "oldest",
+        "dry_run": false,
+        "summary": {
+            "files_scanned": 7,
+            "candidates": 4,
+            "groups": 1,
+            "duplicates": 1,
+            "reclaimable_bytes": MIB,
+            "reclaimable": "1.0 MiB",
+        },
+        "groups": [{
+            "size": MIB,
+            "digest": "408b168d5e17ab41ebbccdfce45ad4da9cf9d4bb55aa56c5c2b11da98c13a0bc",
+            "reclaimable_bytes": MIB,
+            "keep": p("a-link.bin").to_string_lossy(),
+            "remove": [p("sub/a-copy.bin").to_string_lossy()],
+            "files": [
+                file_entry(&p("a-link.bin")),
+                file_entry(&p("a.bin")),
+                file_entry(&p("sub/a-copy.bin")),
+            ],
+        }],
+    });
+    assert_eq!(json, expected);
+}
+
+#[test]
+fn characterize_text_report() {
+    let dir = fixture();
+    let p = |rel: &str| dir.path().join(rel).display().to_string();
+    let expected = format!(
+        "[1] 1.0 MiB × 3  (1.0 MiB reclaimable)\n  ★ {}\n    {}\n    {}\n\n1 group, 1 duplicate, 1.0 MiB reclaimable (7 files scanned)\n",
+        p("a-link.bin"),
+        p("a.bin"),
+        p("sub/a-copy.bin"),
+    );
+    twins()
+        .args(["scan", "--exclude", "*.log"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(expected)
+        .stderr("");
+}
+
+#[test]
+fn usage_errors_exit_2_with_the_same_message() {
+    twins()
+        .args(["scan", "/System"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("twins: /System: protected location, refusing to scan\n");
+    twins()
+        .args(["scan", "--min-size", "12X", "."])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("twins: invalid size \"12X\"\n");
+    twins()
+        .args(["scan", "--exclude", "[", "."])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicate::str::starts_with(
+            "twins: invalid exclude pattern \"[\": ",
+        ));
+}
+
+#[test]
+fn unreadable_files_are_counted_and_listed_with_verbose() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = fixture();
+    let unique = dir.path().join("unique.bin");
+    fs::set_permissions(&unique, fs::Permissions::from_mode(0o000)).unwrap();
+    let restore = || fs::set_permissions(&unique, fs::Permissions::from_mode(0o644)).unwrap();
+    if fs::File::open(&unique).is_ok() {
+        // Running as root: permissions do not stop the read.
+        restore();
+        return;
+    }
+
+    twins()
+        .args(["scan", "--exclude", "*.log"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stderr("1 files could not be read (use --verbose to list them)\n");
+    twins()
+        .args(["scan", "-v", "--exclude", "*.log"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains(format!("skip {}: open ", unique.display()))
+                .and(predicate::str::contains("could not be read").not()),
+        );
+    twins()
+        .args(["scan", "--json", "--exclude", "*.log"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stderr("");
+
+    restore();
+}
