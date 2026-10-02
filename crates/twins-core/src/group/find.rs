@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use rayon::prelude::*;
 
@@ -44,7 +44,9 @@ impl fmt::Display for Stage {
 /// Each stage begins with exactly one event where `done == 0`, sent from the
 /// calling thread before any worker event of that stage, even when the stage
 /// has nothing to do. Every later event of the stage has `done >= 1`, so a
-/// `done == 0` event unambiguously marks a stage start.
+/// `done == 0` event unambiguously marks a stage start. Within a stage,
+/// `done` rises by exactly one per event, so the last event of a stage that
+/// ran to completion is `done == total`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
     /// Stage being run.
@@ -305,7 +307,9 @@ where
     let total = reps.len() as u64;
     // Stage-start marker, sent before any worker can report.
     opts.progress(stage, 0, total);
-    let done = AtomicU64::new(0);
+    // Counting and reporting happen under one lock, so observers see `done`
+    // rise by one per event and the stage's last event is `(total, total)`.
+    let done = Mutex::new(0u64);
     let results: Vec<Option<(Identity, Result<K, HashError>)>> = reps
         .par_iter()
         .map(|m| {
@@ -313,7 +317,10 @@ where
                 return None;
             }
             let r = key(m);
-            opts.progress(stage, done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            let mut n = done.lock().unwrap_or_else(PoisonError::into_inner);
+            *n += 1;
+            opts.progress(stage, *n, total);
+            drop(n);
             Some((m.identity(), r))
         })
         .collect();
