@@ -7,6 +7,7 @@ mod rules;
 mod walk;
 
 pub use options::Options;
+pub(crate) use walk::walk_observed;
 pub use walk::{Stats, walk};
 
 use std::path::PathBuf;
