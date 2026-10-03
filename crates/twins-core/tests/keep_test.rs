@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use twins_core::fsutil::{FileMeta, Identity};
-use twins_core::group::{Group, Keeper, Strategy, plan, total_reclaimable};
+use twins_core::group::{Action, Group, Keeper, Strategy, plan, total_reclaimable};
 use twins_core::hash::Digest;
 
 fn meta(path: &str, age_secs: u64, ino: u64) -> FileMeta {
@@ -124,5 +124,5 @@ fn plan_reclaimable_counts_physical_bytes_once() {
 fn empty_group_yields_no_decision_and_no_action() {
     let g = group(vec![]);
     assert!(keeper(Strategy::Oldest).choose(&g).is_none());
-    assert!(plan(&[g], &keeper(Strategy::Oldest)).is_empty());
+    assert_eq!(plan(&[g], &keeper(Strategy::Oldest)), [] as [Action; 0]);
 }
