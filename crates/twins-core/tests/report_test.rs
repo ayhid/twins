@@ -107,20 +107,108 @@ fn json_round_trips_through_serde() {
 }
 
 #[test]
-fn text_marks_the_kept_file_and_summarises() {
+fn text_labels_every_row_and_shows_the_group_folder() {
     let mut out = Vec::new();
     report::write_text(&mut out, &sample()).unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("[1] 2.0 KiB × 3  (2.0 KiB reclaimable)"),
-        "{text}"
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "[1] 2.0 KiB × 3  (2.0 KiB reclaimable)\n  /r/\n    keep    a.bin\n    keep    c.bin  (hardlink)\n    remove  b.bin\n\n1 group, 1 duplicate, 2.0 KiB reclaimable (7 files scanned)\n"
     );
-    assert!(text.contains("  ★ /r/a.bin\n"), "{text}");
-    assert!(text.contains("    /r/b.bin\n"), "{text}");
-    assert!(
-        text.ends_with("\n1 group, 1 duplicate, 2.0 KiB reclaimable (7 files scanned)\n"),
-        "{text}"
+}
+
+/// Builds a report from groups of `(size, digest byte, members)` planned with
+/// `Strategy::Oldest`, over 7 scanned files.
+fn report_of(groups: Vec<(u64, &str, Vec<FileMeta>)>) -> Report {
+    let groups: Vec<Group> = groups
+        .into_iter()
+        .map(|(size, byte, files)| {
+            Group::new(size, Digest::from_hex(&byte.repeat(32)).unwrap(), files)
+        })
+        .collect();
+    let actions = plan(&groups, &Keeper::new(Strategy::Oldest, None));
+    let meta = Meta {
+        roots: vec![PathBuf::from("/r")],
+        files: 7,
+        candidates: 4,
+        strategy: Strategy::Oldest,
+        dry_run: false,
+    };
+    report::build(&actions, &meta, at(1_704_067_200))
+}
+
+fn text_of(r: &Report) -> String {
+    let mut out = Vec::new();
+    report::write_text(&mut out, r).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+fn member(path: &str, mtime: u64, inode: u64) -> FileMeta {
+    FileMeta::new(
+        PathBuf::from(path),
+        2048,
+        at(mtime),
+        Identity::new(1, inode),
+    )
+}
+
+#[test]
+fn two_groups_are_separated_by_one_blank_line() {
+    let r = report_of(vec![
+        (
+            2048,
+            "ab",
+            vec![
+                member("/r/a.bin", 1_700_000_000, 20),
+                member("/r/b.bin", 1_700_000_100, 21),
+            ],
+        ),
+        (
+            2048,
+            "cd",
+            vec![
+                member("/r/x/m.bin", 1_700_000_000, 22),
+                member("/r/x/n.bin", 1_700_000_100, 23),
+            ],
+        ),
+    ]);
+    assert_eq!(
+        text_of(&r),
+        "[1] 2.0 KiB × 2  (2.0 KiB reclaimable)\n  /r/\n    keep    a.bin\n    remove  b.bin\n\n[2] 2.0 KiB × 2  (2.0 KiB reclaimable)\n  /r/x/\n    keep    m.bin\n    remove  n.bin\n\n2 groups, 2 duplicates, 4.0 KiB reclaimable (7 files scanned)\n"
     );
+}
+
+#[test]
+fn members_sharing_only_the_root_show_full_paths() {
+    let r = report_of(vec![(
+        2048,
+        "ab",
+        vec![
+            member("/a/x.bin", 1_700_000_000, 30),
+            member("/b/x.bin", 1_700_000_100, 31),
+        ],
+    )]);
+    assert_eq!(
+        text_of(&r),
+        "[1] 2.0 KiB × 2  (2.0 KiB reclaimable)\n    keep    /a/x.bin\n    remove  /b/x.bin\n\n1 group, 1 duplicate, 2.0 KiB reclaimable (7 files scanned)\n"
+    );
+}
+
+#[test]
+fn control_characters_in_paths_stay_on_one_row() {
+    let r = report_of(vec![(
+        2048,
+        "ab",
+        vec![
+            member("/r/a.bin", 1_700_000_000, 40),
+            member("/r/evil\n    keep    x.bin", 1_700_000_100, 41),
+        ],
+    )]);
+    let text = text_of(&r);
+    assert_eq!(
+        text,
+        "[1] 2.0 KiB × 2  (2.0 KiB reclaimable)\n  /r/\n    keep    a.bin\n    remove  evil\\n    keep    x.bin\n\n1 group, 1 duplicate, 2.0 KiB reclaimable (7 files scanned)\n"
+    );
+    assert_eq!(text.lines().count(), 6);
 }
 
 #[test]
