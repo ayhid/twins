@@ -2,7 +2,7 @@
 //! schema is versioned; bump [`VERSION`] on breaking changes.
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -150,7 +150,11 @@ pub fn write_json(w: &mut impl Write, r: &Report) -> io::Result<()> {
     w.write_all(b"\n")
 }
 
-/// Writes a human-readable listing; the kept file is marked with ★.
+/// Writes a human-readable listing. Each group prints its shared folder once,
+/// on a line ending in `/`, then one row per member with its path relative to
+/// that folder. Every row is labelled from the report's `keep` and `remove`
+/// fields: `keep` for the kept file, `keep` with a `(hardlink)` suffix for
+/// hardlinks of it, and `remove` for files the plan removes.
 ///
 /// # Errors
 /// When the writer fails.
@@ -171,9 +175,25 @@ pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()> {
             g.files.len(),
             human_size(g.reclaimable_bytes)
         )?;
-        for f in &g.files {
-            let marker = if f.path == g.keep { "★" } else { " " };
-            writeln!(w, "  {marker} {}", f.path)?;
+        let folder = shared_folder(g);
+        if let Some(folder) = &folder {
+            writeln!(w, "  {}/", folder.display())?;
+        }
+        let mut rows: Vec<(Role, &FileEntry)> =
+            g.files.iter().map(|f| (Role::of(&f.path, g), f)).collect();
+        rows.sort_by_key(|(role, _)| *role);
+        for (role, f) in rows {
+            let full = Path::new(&f.path);
+            let shown = folder
+                .as_deref()
+                .and_then(|d| full.strip_prefix(d).ok())
+                .unwrap_or(full);
+            let (label, suffix) = match role {
+                Role::Keep => ("keep", ""),
+                Role::Hardlink => ("keep", "  (hardlink)"),
+                Role::Remove => ("remove", ""),
+            };
+            writeln!(w, "    {label:<6}  {}{suffix}", shown.display())?;
         }
     }
     writeln!(
@@ -186,6 +206,47 @@ pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()> {
         r.summary.reclaimable,
         r.summary.files_scanned
     )
+}
+
+/// What happens to a group member, in the order rows are printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Role {
+    Keep,
+    Hardlink,
+    Remove,
+}
+
+impl Role {
+    /// The role of `path` in `g`, read only from the plan's `keep` and
+    /// `remove` fields.
+    fn of(path: &str, g: &GroupEntry) -> Self {
+        if path == g.keep {
+            Self::Keep
+        } else if g.remove.iter().any(|r| r == path) {
+            Self::Remove
+        } else {
+            // Keeper::choose never removes a hardlink of the kept file.
+            Self::Hardlink
+        }
+    }
+}
+
+/// The longest common folder of the members' parent folders.
+fn shared_folder(g: &GroupEntry) -> Option<PathBuf> {
+    let mut parents = g
+        .files
+        .iter()
+        .map(|f| Path::new(&f.path).parent().unwrap_or(Path::new("")));
+    let mut common: Vec<Component> = parents.next()?.components().collect();
+    for p in parents {
+        let same = common
+            .iter()
+            .zip(p.components())
+            .take_while(|(a, b)| **a == *b)
+            .count();
+        common.truncate(same);
+    }
+    Some(common.iter().collect())
 }
 
 fn plural(n: u64) -> &'static str {
