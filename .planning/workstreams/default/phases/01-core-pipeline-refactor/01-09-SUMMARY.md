@@ -210,3 +210,9 @@ None. No external service configuration is required.
 ---
 *Phase: 01-core-pipeline-refactor*
 *Completed: 2026-10-03*
+
+## Self-Check: PASSED
+
+- All 3 modified source and test files and this SUMMARY exist on disk.
+- Commits `f4cc73a`, `076c8c9`, `83146ef` and `1a18001` are in `git log d36a0c3..HEAD`, plus the SUMMARY commit `eff94ed`.
+- The plan made no file deletions, and the working tree is clean.
