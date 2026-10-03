@@ -1,212 +1,196 @@
 ---
 phase: 01-core-pipeline-refactor
-reviewed: 2026-10-02T21:12:30Z
+reviewed: 2026-10-03T16:12:39Z
 depth: standard
-iteration: 3
-files_reviewed: 23
+iteration: 4
+files_reviewed: 10
 files_reviewed_list:
-  - .github/workflows/ci.yml
-  - Cargo.toml
-  - crates/twins-cli/Cargo.toml
-  - crates/twins-cli/src/main.rs
-  - crates/twins-cli/src/progress.rs
-  - crates/twins-cli/src/run.rs
   - crates/twins-cli/tests/cli_test.rs
-  - crates/twins-core/src/group/find.rs
-  - crates/twins-core/src/group/hasher.rs
-  - crates/twins-core/src/hash.rs
-  - crates/twins-core/src/human.rs
-  - crates/twins-core/src/lib.rs
-  - crates/twins-core/src/observe.rs
   - crates/twins-core/src/pipeline.rs
   - crates/twins-core/src/report.rs
   - crates/twins-core/src/scan/mod.rs
   - crates/twins-core/src/scan/walk.rs
   - crates/twins-core/tests/group_test.rs
-  - crates/twins-core/tests/hash_test.rs
-  - crates/twins-core/tests/human_test.rs
+  - crates/twins-core/tests/keep_test.rs
   - crates/twins-core/tests/observe_test.rs
   - crates/twins-core/tests/pipeline_test.rs
-  - crates/twins-core/tests/scan_test.rs
+  - crates/twins-core/tests/report_test.rs
 findings:
   critical: 0
-  warning: 1
-  info: 12
-  total: 13
+  warning: 2
+  info: 10
+  total: 12
 status: issues_found
 ---
 
-# Phase 01: Code Review Report (iteration 3)
+# Phase 01: Code Review Report (iteration 4)
 
-**Reviewed:** 2026-10-02T21:12:30Z
+**Reviewed:** 2026-10-03T16:12:39Z
 **Depth:** standard
-**Files Reviewed:** 23
+**Files Reviewed:** 10
 **Status:** issues_found
 
 ## Summary
 
-This pass checks the iteration-2 WR-01 fix (e8c1c54). The fix makes `pipeline::keeper` canonicalize the keep dir and map it onto the walk's spelling of the first root that contains it. It also adds `KeepDirOutsideRoots` and `KeepDir { path, source }`.
+This is an incremental review of `96a4f4d..HEAD`. It covers three changes:
+
+- **The iteration-3 WR-01 fix.** `keeper` now maps the keep dir onto `scan::normalise_roots`.
+- **Plan 01-08.** The clippy 1.99 `assert_is_empty` rewrites in the tests.
+- **Plan 01-09.** The new keep/remove text layout in `report.rs`.
 
 Gates on the current tree: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` all pass.
 
-What the fix gets right. I verified each point in the code, and the spelling cases with a scratch program built against the current `twins-core`:
+**Verified as correct:**
 
-- **Strategies other than in-dir are unaffected.** `keeper` returns at `pipeline.rs:298-300` before it reads `keep_dir`, so the keep dir is never resolved or required for those strategies. The CLI never sets `InDir`.
-- **The spellings from iteration 2 now match:** a relative keep dir from a symlinked cwd, `/private/tmp` against `/tmp`, a symlinked root, a symlinked subdirectory and a different letter case.
-- **A keep dir equal to the root works.** `walked.join("")` adds a trailing separator, which `Path::starts_with` ignores, so every file matches and the keeper falls back to the oldest copy. That is correct.
-- **Exit codes are correct and tested.** `KeepDir` with `NotFound` or `NotADirectory` exits 2, other `KeepDir` errors exit 1, `KeepDirOutsideRoots` exits 2, and `Scan(Io{op:"resolve"})` exits 2, the same as the walk's own `stat` failure. `describe()` prints the `#[source]` of `KeepDir` once.
-- **Unreadable roots are handled.** A root with mode `000` still canonicalizes, because `realpath` only needs search permission on the parents, so the keeper never rejects a root the walk would accept. A root that does not exist fails as `Scan(Io)` before any event other than `Finished`.
-- **Overlapping roots spelled differently are safe.** For `/tmp/x` and `/private/tmp/x`, the walk visits each file twice. `Keeper::choose` filters out entries that share the keeper's identity, so the second spelling of the kept file is never listed for removal.
+- **WR-01 (iteration 3) is resolved.** `keeper` iterates the same de-duplicated, sorted and validated list the walk descends (`pipeline.rs:316`, `walk.rs:267-285`). A nested root such as `R/shortcut` or `R/KEEP` can no longer be the mapping target. The new tests `in_dir_maps_the_keep_dir_past_a_nested_symlinked_root` and `..._in_a_different_case` cover both root orders. I also checked that `PathBuf` ordering is component-wise, so every descendant of a root sorts directly after it, and the `out.last()`-only comparison still drops every nested root.
+- **IN-10 (iteration 3) is mostly resolved.** Root errors (`NoRoots`, `ProtectedRoot`, `NotDirectory`) now come before keep-dir errors, and a test covers this. One leftover case is listed as IN-04.
+- **The JSON report is unchanged.** The diff only touches `write_text`, its private helpers and the doc comment. `build`, `to_entry`, `to_file`, `display` and `write_json` are byte-identical, and `json_schema_is_stable` was not modified and still passes.
+- **Text roles come only from `GroupEntry::keep` / `remove`.** `Role::of` (`report.rs:229-238`) reads nothing else. Because `Keeper::choose` (`keep.rs:91-99`) removes every member whose identity differs from the keeper's, any member that is neither `keep` nor in `remove` shares the kept file's identity, so the `keep` label is accurate for pipeline output.
+- **A filename cannot add a logical line.** Every `char::is_control` character, including `\n`, `\r`, ESC and U+0085, is escaped. The test asserts `lines().count()`.
+- **The 01-08 test rewrites keep their meaning.** In `observe_test`, the non-empty check became an exact stage-sequence assertion, which is stronger than before.
 
-The fix is still incomplete. `keeper` maps the keep dir onto roots *in the order the caller gave them*, but the walk first drops any root that sits lexically inside another (`normalise_roots`, `walk.rs:274-281`). When the first matching root is one that gets dropped, and its spelling differs physically from the surviving root's (a symlink, or a different letter case), the rebuilt keep dir names a path the walk never produces. The plan then silently keeps the oldest copy and puts the copy inside the keep dir in `remove`, which is the same harm as WR-01. I reproduced this; see WR-01 below.
+**Key concerns:**
 
-Three new Info findings came out of the same code path:
+The escaping in `printable` only blocks line breaks that `str::lines` sees. Two things still let a filename visually forge or disguise a row:
 
-- **IN-10:** error precedence now differs when `InDir` is selected.
-- **IN-11:** a keep dir under a path the walk skips is accepted without error.
-- **IN-12:** an existing walk behaviour: a root that is a symlink nested in another root is silently never scanned.
+- **WR-01:** Unicode line and paragraph separators, bidi overrides and zero-width characters pass through unescaped. I verified each one against `is_control` / `escape_debug` and confirmed that APFS accepts such names.
+- **WR-02:** a run of plain spaces makes the terminal soft-wrap, so a forged `    keep    x.bin` row starts at column 0.
 
-All nine earlier Info findings are still valid and are carried forward with updated line numbers.
+Neither changes the plan itself. But the dry-run text report is how a user decides whether to delete, and plan 01-09's stated invariant is that a filename must not be able to forge a row.
 
 ## Narrative Findings (AI reviewer)
 
 ## Warnings
 
-### WR-01: The in-dir keep dir can still be mapped onto a root the walk drops, so the copy in the keep dir is planned for removal
+### WR-01: `printable` lets Unicode separators, bidi controls and invisible characters through, so a filename can disguise or visually split its row
 
-**File:** `crates/twins-core/src/pipeline.rs:313-330`; root de-duplication in `crates/twins-core/src/scan/walk.rs:264-283`
-**Issue:**
-- `keeper` goes through `spec.walk_options().roots()` in the order given and returns `walked.join(rest)` for the first root whose canonical path contains the keep dir.
-- The walk does not walk those roots as given. `normalise_roots` sorts the absolutized roots and drops every root that `starts_with` an earlier one *lexically*. `collect_files` uses `follow_links(false)`, so the walk names a dropped root's files after the surviving root's physical directory names.
-- Suppose a dropped root is lexically nested but physically spelled differently. Two examples: `R/shortcut`, where `shortcut -> keep`, and `R/KEEP` on a case-insensitive volume. If that root comes first, the keeper's dir becomes `R/shortcut/...` or `R/KEEP/...`. No walk path starts with that, so `Keeper::in_dir` matches nothing, the strategy silently falls back to the oldest copy, and the copy inside the user's keep dir goes into `remove`.
+**File:** `crates/twins-core/src/report.rs:260-272`
+**Issue:** `printable` escapes only `char::is_control()`, which is general category Cc. I checked the following characters against the toolchain and created such names on APFS in the scratchpad: Python `open('x\u2028y')` and `open('x\u202ey')` both succeed. Every one of them has `is_control() == false`, so `printable` passes it through verbatim:
 
-I reproduced this on the current tree with a scratch binary linked against `twins-core`. The tree is `a.bin` (older), `keep/b.bin` (newer) and `shortcut -> keep`:
+- U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR. Webviews (the planned Tauri app), many editors and some pagers render them as line breaks. A name like `evil\u{2028}    keep    x.bin` then shows a second row labelled `keep`.
+- U+202A-U+202E and U+2066-U+2069, the bidi embeddings, overrides and isolates. Trojan Source-style, a `remove` row can display a path that reads like a different file, for example the kept file's name. It can also visually reorder its `  (hardlink)` suffix.
+- U+200B-U+200F (zero-width characters, LRM/RLM), U+2060-U+2064 and U+FEFF. Two members of one group can then display as byte-for-byte identical names, one labelled `keep` and one `remove`.
 
-```
-roots [R/shortcut, R]  keep_dir R/shortcut  -> keep R/a.bin       remove [R/keep/b.bin]   (wrong)
-roots [R, R/shortcut]  keep_dir R/shortcut  -> keep R/keep/b.bin  remove [R/a.bin]
-roots [R/KEEP, R]      keep_dir R/keep      -> keep R/a.bin       remove [R/keep/b.bin]   (wrong)
-roots [R, R/KEEP]      keep_dir R/keep      -> keep R/keep/b.bin  remove [R/a.bin]
-```
+A related problem: `\` itself is not escaped, so the escaped form is ambiguous. A file literally named `a\nb` (backslash, `n`) and a file named `a<LF>b` both print as `a\nb`.
 
-The result depends only on the order of the roots. Listing the keep dir as an extra root is a natural thing to do ("scan `~` and `~/Archive`, keep what is in `~/Archive`"), so this input is plausible. Keep-one still holds, so nothing is lost today. But this is the single entry point that phase 2's clean will execute, and the plan contradicts the user's explicit keep choice without saying so: the exact defect WR-01 has tracked since iteration 1.
+The function's doc and the 01-09 goal ("a filename must not be able to forge a row") are therefore only met for consumers that split on Cc line breaks.
 
-The new tests miss it. `in_dir_keeps_the_copy_under_a_keep_dir_in_the_second_root` uses two disjoint roots, and none of the tests passes a root nested inside another.
-
-**Fix:** Map the keep dir onto the roots the walk will actually walk. Have `scan` expose the normalised list, for example by making `normalise_roots` `pub(crate)` and re-exporting it as `scan::walk_roots(&Options) -> Result<Vec<PathBuf>, ScanError>`, and use it in `keeper`:
+**Fix:** Escape the separator, format and bidi ranges as well, and escape the backslash so the output stays unambiguous. Do not switch to `char::escape_debug` for every character. It also escapes grapheme extenders such as U+0301, which would mangle legitimate NFD names (common on HFS+-era files).
 
 ```rust
-// pipeline.rs, keeper()
-let roots = scan::walk_roots(spec.walk_options())?; // validates + de-duplicates like the walk
-for walked in &roots {
-    let real_root = std::fs::canonicalize(walked).map_err(|source| {
-        ScanError::Io(FsError::Io { op: "resolve", path: walked.clone(), source })
-    })?;
-    if let Ok(rest) = real.strip_prefix(&real_root) {
-        return Ok(Keeper::new(Strategy::InDir, Some(walked.join(rest))));
+fn printable(path: &Path) -> String {
+    let mut s = String::new();
+    for c in path.to_string_lossy().chars() {
+        let invisible = matches!(c,
+            '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}');
+        if c == '\\' {
+            s.push_str("\\\\");
+        } else if c.is_control() || invisible {
+            s.extend(c.escape_debug());
+        } else {
+            s.push(c);
+        }
     }
+    s
 }
-Err(PipelineError::KeepDirOutsideRoots(dir.to_path_buf()))
 ```
 
-This also fixes IN-10, because the roots are then validated before the keep dir checks. Add a pipeline test with roots `[t.path("shortcut"), t.root()]` and `[t.path("KEEP"), t.root()]` (the second only on a case-insensitive volume) that asserts `keep/b.bin` survives.
+Add tests with `\u{2028}`, `\u{202E}`, `\u{200B}` and a literal backslash.
+
+### WR-02: A filename padded with spaces soft-wraps in the terminal and renders a forged `keep` row at column 0
+
+**File:** `crates/twins-core/src/report.rs:192-204`; test `crates/twins-core/tests/report_test.rs:196-212`
+**Issue:** Spaces are printed verbatim. Take a member named `evil` followed by enough spaces to reach the right margin, then `    keep    x.bin`. Its row `    remove  evil<spaces>    keep    x.bin` is one logical line, but the terminal wraps it. The continuation line starts at column 0 with `    keep    x.bin`, identical to a real keep row.
+
+- **Reachability:** APFS NAME_MAX is 255 bytes. The row prefix is 12 columns, plus the relative path, so a single path component can forge rows on terminals up to about 230 columns wide. That includes the default 80-column Terminal.
+- **The suffix can be forged too:** the `  (hardlink)` marker is trailing free text, so a kept file named `a  (hardlink)` is indistinguishable from a hardlink row.
+- **The test misses it:** `control_characters_in_paths_stay_on_one_row` asserts only `lines().count()`, so it cannot catch a visual forgery.
+
+This matters because the text report is the human review surface before a delete. The plan is unaffected, but the user can be misled about which copy survives.
+
+**Fix:** Make the path column unforgeable:
+
+- Quote any path that contains a run of two or more spaces, leading or trailing whitespace, or any escaped character, the way `ls --quoting-style=shell-escape` does, for example `remove  'evil      keep    x.bin'`.
+- Move the hardlink marker into the fixed-width label column instead of a trailing suffix, for example `keep*` or a `link` label, so that no filename text can imitate it.
+- Extend the test to assert that every printed path is quoted when it contains a space run.
 
 ## Info
 
-### IN-01: A second Ctrl+C leaves the progress line on the terminal
+### IN-01: Any member missing from `keep` / `remove` is labelled `(hardlink)` without checking its inode
 
-**File:** `crates/twins-cli/src/run.rs:67-73`
-**Issue:** Still valid. `register_conditional_shutdown` calls `_exit(130)` from the signal handler, so `Finished` never fires and `\r\x1b[K` is never written. The shell prompt then appears after a stale progress line such as `[4/5] full hash  12 / 40`. There is also a small window between the two `register` calls in which a SIGINT is swallowed.
-**Fix:** Add a comment that accepts the leftover line, or write `\r\x1b[K` with a raw `write(2)` from a `signal_hook::low_level` handler before exiting.
+**File:** `crates/twins-core/src/report.rs:229-238`
+**Issue:** The fallback branch assumes that "not keep and not removed" means "a hardlink of the kept file". That is not always true:
 
-### IN-02: The "files could not be read" count includes things that are not unreadable files
+- **Overlapping roots spelled differently.** With roots such as `/tmp/x` and `/private/tmp/x`, which the walk visits twice (iteration-3 summary), the second spelling is the same file, not a hardlink, yet it is shown as `keep  ...  (hardlink)`.
+- **External or inconsistent reports.** `Report` is `pub` and `Deserialize`, and the app is expected to consume it. A report from any other source, or an inconsistent one, gets every unlisted member silently rendered as kept.
 
-**File:** `crates/twins-cli/src/run.rs:50-53`, `crates/twins-core/src/pipeline.rs:152-156`, `crates/twins-core/src/pipeline.rs:283`
-**Issue:** Still valid. `ScanOutcome::errors` also counts walk errors on unreadable *directories* and `GroupError::HashCollision`, which is a readable file whose content differs. The CLI reports all of them as "N files could not be read", including the ungrammatical "1 files".
-**Fix:** Count collisions separately, or reword the message to "N entries skipped", and pluralize correctly.
+`FileEntry` carries `inode`, so the writer can verify the claim.
+**Fix:** Look up the keep entry's inode in `g.files`. Label a member `Hardlink` only when `f.inode == keep_inode`, and otherwise use a distinct role such as `unplanned` (or `debug_assert!`). Consider a `(same file)` suffix when the inode matches and the paths are aliases.
 
-### IN-03: Verbose skip lines print the path twice
+### IN-02: Roles are matched on lossy path strings
 
-**File:** `crates/twins-cli/src/progress.rs:98`, `crates/twins-core/src/pipeline.rs:358-363`
-**Issue:** Still valid. The `Display` of `HashError`, `walkdir::Error` and `GroupError::HashCollision` already includes the path, so a line reads `skip /x/b: open /x/b: Permission denied (os error 13)`. `Event::FileSkipped { path, reason }` now locks this shape into the public event contract for the app.
-**Fix:** In `pipeline::skipped`, build `reason` from the op and the underlying `io::Error` only, without the path.
+**File:** `crates/twins-core/src/report.rs:140-142`, `crates/twins-core/src/report.rs:229-233`
+**Issue:** `display` uses `to_string_lossy`. Two members whose names differ only in invalid UTF-8 bytes collapse to the same string, and `Role::of` then labels both `keep`. APFS and HFS+ reject such names (I confirmed `EILSEQ` on APFS), so this is reachable only on FUSE-style local volumes. The JSON has the same ambiguity, which predates this phase.
+**Fix:** Document the assumption next to `Role::of`, or make `display` lossless, for example by escaping invalid bytes as `\xNN`. Only paths that are already lossy would change, so the JSON for valid UTF-8 paths stays the same.
 
-### IN-04: Walk progress freezes during the stat phase
+### IN-03: The text layout test for the hardlink row relies on a path tiebreak that is not documented
 
-**File:** `crates/twins-core/src/scan/walk.rs:128-138`, `crates/twins-core/src/scan/walk.rs:195`, `crates/twins-core/src/pipeline.rs:373-374`
-**Issue:** Still valid. `Progress` is emitted only while directories are listed. The parallel `lstat` pass emits nothing, so on a large root the line stays at `[1/4] walk  N files` for the whole stat phase. The comment calling listing "the slow part" has not been checked.
-**Fix:** Also report from `handle_file`, or document the freeze and remove the "slow part" claim.
+**File:** `crates/twins-cli/tests/cli_test.rs:121-124`, `crates/twins-cli/tests/cli_test.rs:266-272`
+**Issue:** The expected output `keep    a-link.bin` / `keep    a.bin  (hardlink)` holds only because the hardlinks share an mtime and `"a-link.bin" < "a.bin"` in the final path tiebreak (`keep.rs:120-122`). This is correct today, but the characterization test silently depends on that ordering, and the negative assertions (`"remove  a.bin"` and `"remove  a-link.bin"` absent) are redundant given the exact-match test.
+**Fix:** Add a comment in the test naming the tiebreak, so that a future strategy change is understood as intentional churn rather than a regression.
 
-### IN-05: Exit code 2 is used for errors that are not usage errors
+### IN-04: `MissingKeepDir` still comes before root validation, contrary to the `scan` doc
 
-**File:** `crates/twins-cli/src/run.rs:93-95`, `crates/twins-core/src/scan/walk.rs:113-122`, `crates/twins-core/src/pipeline.rs:319-325`
-**Issue:** Still valid, and widened by the fix. `PipelineError::Scan(_)` maps to 2. That includes these I/O failures:
-- `ScanError::Io` from EACCES or EIO on a root;
-- a failure to build the walk thread pool;
-- the keeper's new `ScanError::Io { op: "resolve" }`.
+**File:** `crates/twins-core/src/pipeline.rs:238-244`, `crates/twins-core/src/pipeline.rs:312-316`
+**Issue:** The doc says the keep dir is "checked before the walk, after the roots are validated". However, `keeper` returns `MissingKeepDir` (line 315) before it calls `normalise_roots` (line 316). With `InDir`, no keep dir and no roots or a protected root, the user is told the keep dir is missing instead of `NoRoots` or `ProtectedRoot`. This is the leftover of iteration-3 IN-10.
+**Fix:** Call `scan::normalise_roots` first, or change the doc to say that a missing keep directory is reported first. Add the case to `in_dir_reports_root_errors_before_keep_dir_errors`.
 
-`KeepDir` already distinguishes `NotFound` (2) from other I/O failures (1), so the two paths now disagree.
-**Fix:** Map `PipelineError::Scan(ScanError::Io(_))` to 1, except `NotFound`, following the `KeepDir` rule. Give the walk pool failure its own variant.
+### IN-05: The keeper and the walk each compute `normalise_roots`, so "must never diverge" holds only by convention
 
-### IN-06: The SIGINT tests never run in CI
+**File:** `crates/twins-core/src/pipeline.rs:316`, `crates/twins-core/src/scan/walk.rs:262-266`
+**Issue:** `keeper` and `scan::walk_observed` call `normalise_roots` separately. Each root is therefore stat'ed and statfs'ed twice. The keeper's list and the walk's list can also differ if the filesystem changes in between, for example a root replaced by a symlink or removed. The doc comment on `normalise_roots` states the invariant, but nothing enforces it.
+**Fix:** Compute the list once in `run` and pass it to both `keeper` and the walk, for example with an `Options` variant or a `walk_roots(&[PathBuf], ...)` entry point.
 
-**File:** `crates/twins-cli/tests/cli_test.rs:385`, `crates/twins-cli/tests/cli_test.rs:401-429`, `.github/workflows/ci.yml:20,29`
-**Issue:** Still valid. The only end-to-end coverage of exit 130 and the double-Ctrl+C behaviour is marked `#[ignore]`, and neither CI job passes `--ignored`. `spawn_busy_scan` also relies on a fixed 700 ms sleep.
-**Fix:** Add a CI step that runs `cargo test -p twins-cli --test cli_test -- --ignored sigint`, possibly allowed to fail. Alternatively, wait for a readiness marker on stderr instead of sleeping.
+### IN-06: The case-insensitive keep-dir test passes silently on case-sensitive volumes
 
-### IN-07: Small API and documentation inconsistencies in the new public surface
+**File:** `crates/twins-core/tests/pipeline_test.rs` (`in_dir_maps_the_keep_dir_past_a_nested_root_in_a_different_case`)
+**Issue:** On a case-sensitive volume, the test hits `return` and reports `ok`, with no signal that it did not run. A CI runner on a case-sensitive APFS volume would never exercise the WR-01 case-mismatch path.
+**Fix:** Print a skip notice (`eprintln!`), or create a case-insensitive disk image in CI. Alternatively, mark the test `#[ignore]` with a reason and run it explicitly.
 
-**File:** `crates/twins-core/src/observe.rs:104`, `crates/twins-core/src/pipeline.rs:166-198`, `crates/twins-core/src/pipeline.rs:372`, `crates/twins-core/src/group/find.rs:47-48`, `crates/twins-core/src/group/find.rs:143-145`
-**Issue:** Still valid:
-- `Outcome` and `PipelineError` are not `#[non_exhaustive]`. `PipelineError` gained another variant in this iteration (`KeepDirOutsideRoots`), and `KeepDir` changed from a tuple variant to a struct variant. Both are breaking changes for any downstream exhaustive `match`.
-- `PipelineError::Scan` is a public tuple variant, so `Scan(ScanError::Cancelled)` can be built even though the docs say it never holds that.
-- `walk_stage` silently replaces any `cancel` flag already set on the `scan::Options` passed in.
-- The stage-start marker is documented as coming "from the calling thread", but it is sent from a pool worker inside `pool.install`.
+### IN-07: A keep dir under a path the walk skips is accepted, and the scan quietly does not use it (carried forward, iteration-3 IN-11)
 
-**Fix:**
-- Mark `Outcome` and `PipelineError` `#[non_exhaustive]`.
-- Document that the token overrides `scan::Options::cancel`.
-- Change the thread wording to "before any worker reports for that stage".
+**File:** `crates/twins-core/src/pipeline.rs:309-341`, `crates/twins-core/src/scan/walk.rs:165-177`
+**Issue:** Still valid. A keep dir under an `--exclude` glob, `node_modules`, `~/Library` or a remote mount passes every `keeper` check. Its files are never grouped, so a copy that the user expected to be removed survives as the oldest.
+**Fix:** Check the mapped keep dir's components against `Rules::skip_dir` and the Library and remote checks, and fail with a usage variant. Otherwise, document the behaviour on `ScanSpec::keep_dir`.
 
-### IN-08: The project docs still say Rust 1.85 after the MSRV bump
+### IN-08: A root that is a symlink nested in another root is silently never scanned (carried forward, iteration-3 IN-12)
 
-**File:** `Cargo.toml:10`, `.github/workflows/ci.yml:22-29`, `.claude/CLAUDE.md:20,33,39,89`
-**Issue:** Still valid. `rust-version` is 1.90, which the code needs (let-chains, `is_multiple_of`, and now `ErrorKind::NotADirectory`). `.claude/CLAUDE.md` still says 1.85 in four places.
-**Fix:** Update `CLAUDE.md`, and the README if it states an MSRV.
+**File:** `crates/twins-core/src/scan/walk.rs:278-283`
+**Issue:** Still valid. `normalise_roots` drops a root that lexically `starts_with` another, but the walk does not follow links (`walk.rs:165`), so `twins scan ~ ~/Dropbox` with `~/Dropbox -> ~/Library/CloudStorage/Dropbox` never scans Dropbox. Since the WR-01 fix, an in-dir keep dir under such a root now fails loudly with `KeepDirOutsideRoots`. That message is confusing, because the user did list the folder as a root.
+**Fix:** De-duplicate on canonical paths and keep the walk spelling of the surviving root. Alternatively, drop a nested root only when `canonicalize(nested).starts_with(canonicalize(outer))`.
 
-### IN-09: The Ticker documentation says a slow callback never delays hashing, but the reporting worker stops hashing for as long as it keeps reporting
+### IN-09: Iteration-3 findings still open in reviewed files (carried forward)
 
-**File:** `crates/twins-core/src/group/find.rs:147-153`, `crates/twins-core/src/observe.rs:166-171`
-**Issue:** Still valid. The worker that holds the reporting slot delivers every pending count, one callback call each, and claims the slot again whenever `done` has moved. With a slow observer, one worker can stay the reporter for the whole stage. That costs one hashing worker, all of the hashing with `--jobs 1`, and the stage waits for the whole backlog to drain. This does not matter for `Throttle` in the CLI, but it does for the app's observer.
-**Fix:** Reword the docs to say a slow callback costs at most one hashing worker and that the stage waits until every count has been delivered. Optionally, coalesce the backlog.
+**File:** `crates/twins-core/src/pipeline.rs:169`, `crates/twins-core/src/pipeline.rs:367-372`, `crates/twins-core/src/pipeline.rs:327-333`, `crates/twins-core/src/scan/walk.rs:230`, `crates/twins-cli/tests/cli_test.rs:376-385`
+**Issue:** These are unchanged by this diff and still valid:
 
-### IN-10: With in-dir selected, root errors are reported as keep-dir errors
+- **Not `#[non_exhaustive]`:** `PipelineError` still lacks it, and so does `observe::Outcome` (old IN-07).
+- **Path printed twice:** `skipped` builds its `reason` from a `Display` that already contains the path (old IN-03).
+- **Exit code 2 for an I/O error:** the keeper's `ScanError::Io { op: "resolve" }` maps to exit 2 although it is an I/O failure (old IN-05).
+- **Progress freezes during stat:** `handle_file` emits no progress (old IN-04).
+- **SIGINT tests never run in CI:** they are `#[ignore]` and use a fixed 700 ms sleep (old IN-06).
 
-**File:** `crates/twins-core/src/pipeline.rs:264`, `crates/twins-core/src/pipeline.rs:313-330`
-**Issue:** `keeper` now runs before `normalise_roots` validates the roots, so the error the user sees depends on the strategy:
-- No roots gives `KeepDirOutsideRoots` instead of `ScanError::NoRoots`.
-- A protected root such as `/usr/share`, a file root or a remote root, with no other root holding the keep dir, gives `"<keep>: keep directory is not inside any scanned root"` instead of `ProtectedRoot`, `NotDirectory` or `RemoteRoot`. I reproduced this for the protected-only and empty-roots cases.
-- A missing protected root gives `resolve <root>: No such file or directory` instead of `protected location`.
+**Fix:** Apply the fixes recorded in iteration 3 for each item.
 
-Exit codes are unchanged (2), but the message points at the wrong argument.
-**Fix:** Validate the roots first. The WR-01 fix (`scan::walk_roots` called at the top of `keeper`) does this as a side effect.
+### IN-10: `Role` sorting puts hardlink rows between keep and remove, but the header count includes them as copies
 
-### IN-11: A keep dir under a path the walk skips is accepted, and the scan quietly does not use it
-
-**File:** `crates/twins-core/src/pipeline.rs:85-97`, `crates/twins-core/src/pipeline.rs:287-296`, `crates/twins-core/src/scan/walk.rs:167-177`
-**Issue:** A keep dir inside a root but under a path the walk skips passes every check in `keeper`. Examples: an `--exclude` glob, `node_modules`, `~/Library`, a remote mount, or a symlink such as `~/Dropbox -> ~/Library/CloudStorage/Dropbox`. Its files are never scanned. I reproduced this with `exclude(["**/keep"])`: no group was formed and the run succeeded.
-
-This is conservative: files in the keep dir are never grouped, so they are never removed. But a copy outside the keep dir that the user expected to be removed survives as the oldest copy. The docs say an unusable keep dir "fails the run before the walk", which is not true for this case.
-**Fix:** After mapping, check each component of the keep dir below the root against `Rules::skip_dir` and the Library/remote checks, and fail with a new usage variant (`KeepDirExcluded`). Otherwise, state this case in the `ScanSpec::keep_dir` and `scan` docs.
-
-### IN-12: A root that is a symlink nested in another root is silently never scanned
-
-**File:** `crates/twins-core/src/scan/walk.rs:274-281`
-**Issue:** This behaviour predates the phase (14c25f6) and lies in a reviewed file. `normalise_roots` drops a root when it lexically `starts_with` another root, on the assumption that the outer walk covers it. But the walk uses `follow_links(false)`, so a nested root that is a symlink is not covered. For `twins scan ~ ~/Dropbox`, where `~/Dropbox -> ~/Library/CloudStorage/Dropbox`, the root `~/Dropbox` is dropped and its files are never scanned, with no error or skip count. The cause is the same as WR-01's.
-**Fix:** De-duplicate on canonical paths, and keep the walk's spelling for the root that survives. Alternatively, drop a nested root only when `canonicalize(nested).starts_with(canonicalize(outer))`.
+**File:** `crates/twins-core/src/report.rs:177-184`
+**Issue:** The header `[1] 1.0 MiB × 3` counts `g.files.len()`, which includes hardlinks of the kept file and aliases of the same file. The new layout labels those rows `keep`, so a reader sees "× 3" but only two physical copies and one removal. This predates the phase, but the new labels make the mismatch more visible.
+**Fix:** Show physical copies in the header (`× 2 copies, 3 paths`), or keep the count and document it in the `write_text` doc.
 
 ---
 
-_Reviewed: 2026-10-02T21:12:30Z_
+_Reviewed: 2026-10-03T16:12:39Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
