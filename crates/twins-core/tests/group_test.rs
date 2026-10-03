@@ -58,7 +58,7 @@ fn groups_identical_files_sorted_by_reclaimable_space() {
 fn same_size_different_content_is_not_a_duplicate() {
     let t = Tree::build(&[("a", b"abcd"), ("b", b"abce")]);
     let idx = index_of(&t, &["a", "b"]);
-    assert!(find(&idx, &Options::default()).unwrap().is_empty());
+    assert_eq!(find(&idx, &Options::default()).unwrap(), [] as [Group; 0]);
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn hardlinks_are_not_duplicates_of_each_other() {
     let t = Tree::build(&[("a", b"same")]);
     t.hard_link("a", "link");
     let idx = index_of(&t, &["a", "link"]);
-    assert!(find(&idx, &Options::default()).unwrap().is_empty());
+    assert_eq!(find(&idx, &Options::default()).unwrap(), [] as [Group; 0]);
 }
 
 #[test]
@@ -363,7 +363,7 @@ fn empty_index_still_marks_hash_stages() {
     let groups = find(&Index::new(), &opts).unwrap();
     drop(opts);
 
-    assert!(groups.is_empty());
+    assert_eq!(groups, [] as [Group; 0]);
     let seen: Vec<(Stage, u64, u64)> = seen
         .into_inner()
         .unwrap()
