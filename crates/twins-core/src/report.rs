@@ -156,6 +156,10 @@ pub fn write_json(w: &mut impl Write, r: &Report) -> io::Result<()> {
 /// fields: `keep` for the kept file, `keep` with a `(hardlink)` suffix for
 /// hardlinks of it, and `remove` for files the plan removes.
 ///
+/// When the members share only the filesystem root, there is no folder line
+/// and rows show full paths. Groups are separated by one blank line. Control
+/// characters in paths are printed escaped, so each file stays on one row.
+///
 /// # Errors
 /// When the writer fails.
 pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()> {
@@ -167,6 +171,9 @@ pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()> {
         );
     }
     for (i, g) in r.groups.iter().enumerate() {
+        if i > 0 {
+            writeln!(w)?;
+        }
         writeln!(
             w,
             "[{}] {} × {}  ({} reclaimable)",
@@ -177,7 +184,7 @@ pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()> {
         )?;
         let folder = shared_folder(g);
         if let Some(folder) = &folder {
-            writeln!(w, "  {}/", folder.display())?;
+            writeln!(w, "  {}/", printable(folder))?;
         }
         let mut rows: Vec<(Role, &FileEntry)> =
             g.files.iter().map(|f| (Role::of(&f.path, g), f)).collect();
@@ -193,7 +200,7 @@ pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()> {
                 Role::Hardlink => ("keep", "  (hardlink)"),
                 Role::Remove => ("remove", ""),
             };
-            writeln!(w, "    {label:<6}  {}{suffix}", shown.display())?;
+            writeln!(w, "    {label:<6}  {}{suffix}", printable(shown))?;
         }
     }
     writeln!(
@@ -231,7 +238,8 @@ impl Role {
     }
 }
 
-/// The longest common folder of the members' parent folders.
+/// The longest common folder of the members' parent folders, or `None` when
+/// it has at most one component (only `/`, or nothing for relative paths).
 fn shared_folder(g: &GroupEntry) -> Option<PathBuf> {
     let mut parents = g
         .files
@@ -246,7 +254,21 @@ fn shared_folder(g: &GroupEntry) -> Option<PathBuf> {
             .count();
         common.truncate(same);
     }
-    Some(common.iter().collect())
+    (common.len() > 1).then(|| common.iter().collect())
+}
+
+/// `path` as shown to a human: every control character is replaced by its
+/// escaped form (a newline becomes `\n`), every other character is kept.
+fn printable(path: &Path) -> String {
+    let mut s = String::new();
+    for c in path.to_string_lossy().chars() {
+        if c.is_control() {
+            s.extend(c.escape_debug());
+        } else {
+            s.push(c);
+        }
+    }
+    s
 }
 
 fn plural(n: u64) -> &'static str {
