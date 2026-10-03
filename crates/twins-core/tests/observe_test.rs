@@ -235,7 +235,15 @@ fn throttled_observer_sees_the_same_stage_sequence() {
 
     let plain = plain.events();
     let throttled = throttled.into_inner().events();
-    assert!(!stages_seen(&plain).is_empty());
+    assert_eq!(
+        stages_seen(&plain),
+        vec![
+            (Stage::Walk, 1, 4),
+            (Stage::SizeGrouping, 2, 4),
+            (Stage::PartialHash, 3, 4),
+            (Stage::FullHash, 4, 4),
+        ]
+    );
     assert_eq!(stages_seen(&throttled), stages_seen(&plain));
     let completed = Event::Finished {
         outcome: Outcome::Completed,
