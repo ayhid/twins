@@ -1,8 +1,8 @@
 ---
 phase: 01-core-pipeline-refactor
-verified: 2026-10-02T21:25:00Z
+verified: 2026-10-03T16:18:26Z
 status: human_needed
-score: 39/39 must-haves verified
+score: 50/50 must-haves verified
 covered_files:
   - .github/workflows/ci.yml
   - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-01-PLAN.md
@@ -19,6 +19,10 @@ covered_files:
   - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-06-SUMMARY.md
   - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-07-PLAN.md
   - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-07-SUMMARY.md
+  - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-08-PLAN.md
+  - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-08-SUMMARY.md
+  - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-09-PLAN.md
+  - .planning/workstreams/default/phases/01-core-pipeline-refactor/01-09-SUMMARY.md
   - Cargo.lock
   - Cargo.toml
   - crates/twins-cli/Cargo.toml
@@ -39,159 +43,164 @@ covered_files:
   - crates/twins-core/tests/group_test.rs
   - crates/twins-core/tests/hash_test.rs
   - crates/twins-core/tests/human_test.rs
+  - crates/twins-core/tests/keep_test.rs
   - crates/twins-core/tests/observe_test.rs
   - crates/twins-core/tests/pipeline_test.rs
+  - crates/twins-core/tests/report_test.rs
   - crates/twins-core/tests/scan_test.rs
-covered_digest: "v2:sha256:41366165cc57f53f29c6e9034d3e07dcb13eb5644dcc8a075e30a8c864a8855f"
+covered_digest: "v2:sha256:07569cd5c4c380d9d91f5c90a3dd6f125e5d5cf3cc0dabd5a89dca8a5ba88eff"
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: human_needed
+  previous_score: 39/39
+  gaps_closed:
+    - "G-01-4 (locally): stable clippy 1.99 pedantic passes with -D warnings on every target; the CI test and msrv command sequences pass locally"
+    - "G-01-1 (in code): the text report labels every row keep / keep (hardlink) / remove, prints each group's folder once, separates groups with one blank line and escapes control characters"
+  gaps_remaining: []
+  regressions: []
+advisory:
+  - finding: "Review WR-01: printable() escapes only char::is_control (Cc). U+2028/U+2029, bidi overrides (U+202A-U+202E, U+2066-U+2069) and zero-width characters pass through, and a literal backslash is not escaped, so a filename can still visually disguise a row in renderers that honour those characters"
+    category: security
+    reason: "Plan 01-09's contract defines the escape set as char::is_control, and that contract is met and tested. The wider spoofing surface is new scope from code review iteration 4, with no failing test. Resolve by widening the escape set plus tests, or by explicitly deferring it to Phase 2, where the text report becomes the review surface before clean"
+    evidence_status: "none provided"
+  - finding: "Review WR-02: a filename padded with spaces soft-wraps in the terminal and can show a forged `    keep    x.bin` continuation at column 0; the `  (hardlink)` suffix is free text a filename can imitate"
+    category: security
+    reason: "Visual-only, terminal-width dependent and not covered by any test. The plan, JSON and roles are unaffected. Resolve by quoting paths with space runs and moving the hardlink marker into the label column, or defer explicitly"
+    evidence_status: "none provided"
 human_verification:
-  - test: "In a real terminal (not a pty emulator), run `cargo run -q -p twins-cli -- scan ~/Downloads` (or any large folder), then again with `--verify`, then with `--json > /dev/null`."
-    expected: "One stderr line redraws in place through `[1/4] walk  N files`, `[2/4] size grouping  N candidates`, `[3/4] partial hash  a / b`, `[4/4] full hash  a / b` (and `[5/5] verify` with --verify), with digit groups separated by spaces. The line is cleared before the report. Progress also shows with --json. The `N candidates` wording is acceptable (research A6)."
-    why_human: "Visual in-place redraw and wording quality. The byte stream was checked under `script(1)` (correct stage order, `\\r\\x1b[K` clears, cleared before the report, shown with --json), but how it looks and reads is a human judgment. This is the 01-03 human-check (SUMMARY D6, human_judgment: true), still open."
-  - test: "In a real terminal, run `cargo run -q -p twins-cli -- scan ~`, press Ctrl+C once during a hashing stage, then `echo $?`. Repeat with `cargo run -q -p twins-cli -- report ~ > /tmp/twins-out.json` and Ctrl+C."
-    expected: "Within about a second the progress line disappears, exactly one line `scan cancelled` follows, `echo $?` prints 130, and /tmp/twins-out.json is empty."
-    why_human: "A real home-directory tree and a TTY Ctrl+C (process-group SIGINT). The automated test (sparse 1 GiB files, kill -INT, non-TTY) and a pty spot-check both pass, but a real large tree on the user's disk is the roadmap's stated scenario."
-  - test: "Start a scan on a slow or external volume and press Ctrl+C twice quickly."
-    expected: "The process exits immediately and `echo $?` prints 130. A stale progress line may remain (IN-01, accepted)."
-    why_human: "Needs a stuck or slow read that cooperative cancellation cannot interrupt. The escape-hatch path itself was observed working (see Behavioral Spot-Checks), but not against a blocked read."
-  - test: "Push the phase commits (main is 83 commits ahead of origin) or open the PR, and check the GitHub Actions `ci` workflow."
-    expected: "Both jobs are green: `test` (stable: fmt, clippy -D warnings, test, release build) and the new `msrv` job on dtolnay/rust-toolchain@1.90.0 (build + test)."
-    why_human: "The msrv job has never run on GitHub; the last CI run (2026-09-07) predates the phase. The same commands pass locally on 1.90.0 with RUSTFLAGS=-D warnings, and actionlint is clean."
+  - test: "Push main (it is 19 commits ahead of origin/main and the 01-08 fix is not on the remote yet), then run `gh run list --branch main --limit 1` and `gh run view <run-id>`."
+    expected: "The `ci` run is success, and both the `test` job (stable toolchain: fmt, clippy -D warnings, test, release build) and the `msrv` job (dtolnay/rust-toolchain@1.90.0: build all targets, test) are green. This closes G-01-4 and UAT test 4."
+    why_human: "Needs the user's push and a remote GitHub Actions run. The last remote run (37133285179) is the failing one that predates 01-08. Every command in both jobs passes locally on rustc 1.99.0 and 1.90.0 with RUSTFLAGS=-D warnings."
+  - test: "Re-run UAT test 1: in a real terminal, run `cargo run -q -p twins-cli -- scan <a real folder with duplicates, hardlinks and subfolder copies>`, and once with `--verify`."
+    expected: "The progress line redraws in place by stage and is cleared before the report. In the report, groups are separated by a blank line, each group's folder is printed once on a line ending in `/`, every row says `keep`, `keep … (hardlink)` or `remove` with a short relative path, and the result reads well."
+    why_human: "Readability is a human judgment (01-09 D6, human_judgment: true). The exact layout is pinned by tests, and the binary was run here on a sample tree, but the user reported G-01-1, so the user must confirm it is closed."
 ---
 
 # Phase 1: Core Pipeline Refactor Verification Report
 
 **Phase Goal:** The scan pipeline runs inside `twins-core`, and any caller (CLI now, app and agent later) can follow its progress by stage and cancel it, on the Rust 1.90 toolchain Tauri needs.
-**Verified:** 2026-10-02T21:25:00Z
+**Verified:** 2026-10-03T16:18:26Z (HEAD 451f3b6; the last code change is 1a18001)
 **Status:** human_needed
-**Re-verification:** No. This is the initial verification. It covers the tree after the three code-review fix iterations (HEAD d95fdf2, last code change 04f1f90).
+**Re-verification:** Yes. This follows UAT (01-UAT.md), which found G-01-4 (the CI test job failed on Rust 1.99 clippy `assert_is_empty`) and G-01-1 (the `twins scan` text report was hard to read). Plans 01-08 and 01-09 closed them. I fully re-verified both gap plans and regression-checked the 39 truths that passed before.
 
 ## Goal Achievement
 
-All five roadmap success criteria hold in the code and were exercised by running it. I ran the gates myself, built the pre-phase binary (10401aa) for an output comparison, and drove the real binary under SIGINT and under a pty. Four items remain for a human: the TTY rendering, interactive Ctrl+C on a real tree, double Ctrl+C on a slow volume, and the first remote CI run of the msrv job.
+The goal holds in the code. Both UAT gaps are closed in code. I ran every gate myself on rustc 1.99.0 (current stable) and on 1.90.0, and drove the built binary on sample trees. Two items still need a human:
+
+- **Remote CI:** the 01-08 fix is not pushed yet, so CI on GitHub has not run with it.
+- **Readability:** the user should re-check that the new text report reads well.
+
+**MVP-mode note:** ROADMAP marks this phase `**Mode:** mvp`, but the goal is not in user-story form (`user-story.validate` → `valid: false`). Plan 01-01 records this and did not invent a story. As in the initial verification, I used standard goal-backward verification and did not produce a User Flow Coverage table. Run `/gsd-mvp-phase 1` if you want the story framing.
 
 ### Roadmap Success Criteria
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| SC1 | `twins scan`/`twins report` produce the same groups and JSON (schema v1) as before, orchestration moved out of `run.rs` into `twins-core`, existing suite passes | ✓ VERIFIED | `run.rs` only builds `ScanSpec` and calls `pipeline::scan(&spec, &observer, &cancel)` (run.rs:42). The grep gate for `scan::walk\|group::find\|group::plan\|Keeper::new\|Index::new\|Meta {\|dry_run` in `crates/twins-cli/src` is empty. `report.rs` diff since the phase base is one `#[allow]` line, and `VERSION = 1`. I ran a parity check: the pre-phase binary vs HEAD on a richer tree (hardlink, nested dirs, node_modules, empty files, logs, relative root, overlapping roots, --verify, --min-size, --include-empty, protected root, bad size). All 13 invocations gave identical JSON (minus `scanned_at`), identical text, identical stderr and identical exit codes. The characterization tests were committed first (c141fe0, cli_test.rs only) and later only tightened, never loosened. `cargo test --workspace`: 131 passed, 2 ignored. |
-| SC2 | A long scan in a terminal shows single-line progress by stage, driven by the core observer; a test observer receives the same stage events in order | ✓ VERIFIED (visual: human) | `run.rs:38-41` wraps `TerminalObserver::stderr(stderr.is_terminal(), verbose)` in `Throttle(80ms)`. `pipeline_test::stage_events_in_order_without_verify`, `_with_verify` and `_on_empty_tree` pass, as does `observe_test::throttled_observer_sees_the_same_stage_sequence`. Under `script(1)` the byte stream reads `[1/5] walk` → `[2/5] size grouping  16 candidates` → `[3/5] partial hash  1 / 16 … 16 / 16` → `[4/5] full hash …` → `[5/5] verify  1 / 1` → `\r\x1b[K` → report. |
-| SC3 | Ctrl+C stops the scan promptly (~1 s on a large tree), prints that it was cancelled, writes no partial report | ✓ VERIFIED (real tree: human) | `install_sigint` registers `register_conditional_shutdown(SIGINT,130)` before `register(SIGINT, cancel.flag())` (run.rs:67-71). `main.rs` has a cancelled arm that prints `scan cancelled` and exits 130. The report is written only after `pipeline::scan` returns Ok. `cargo test -p twins-cli --test cli_test -- --ignored sigint`: 2 passed. Spot-check: `twins report <16×1 GiB sparse>`, then SIGINT after 1 s, gave rc=130 in 0.016 s, 0 stdout bytes, stderr `scan cancelled`. Under a pty the line was cleared (`\r\x1b[K`) before `scan cancelled`. |
-| SC4 | `meta.dry_run` taken from the run's real mode; a test fails if a dry-run report says otherwise | ✓ VERIFIED | `pipeline.rs:448` sets `dry_run: spec.mode.is_dry_run()`. That is the only place the flag is set, and twins-cli never names it. `pipeline_test::dry_run_in_meta_follows_run_mode` asserts false for Scan and true for DryRun, on both the report and `meta()`. `default_run_mode_is_scan` passes too. |
-| SC5 | Workspace builds and passes tests and clippy (pedantic) on Rust 1.90; `rust-version` and CI raised | ✓ VERIFIED (remote CI: human) | `Cargo.toml` sets `rust-version = "1.90"` and there is no rust-toolchain file. On rustc 1.90.0 (1159e78c4) with `RUSTFLAGS=-D warnings`: `cargo +1.90.0 build --workspace --all-targets` exits 0 and `cargo +1.90.0 test --workspace` gives 131 passed, 0 failed. `cargo +1.90.0 clippy --workspace --all-targets -- -D warnings` exits 0, and stable clippy and fmt pass. `ci.yml` gained an `msrv` job on `dtolnay/rust-toolchain@1.90.0`, and actionlint is clean. |
+| SC1 | `twins scan`/`twins report` produce the same groups and JSON (schema v1) as before, orchestration lives in `twins-core`, the existing suite passes | ✓ VERIFIED | **Orchestration:** run.rs:42 still calls `pipeline::scan(&spec, &observer, &cancel)`, and the CLI grep gate (`scan::walk\|group::find\|group::plan\|Keeper::new\|Index::new\|Meta {\|dry_run`) is empty. **JSON unchanged:** since d95fdf2, report.rs changes only the import line, the `write_text` doc and body, and the new private `Role`/`shared_folder`/`printable` helpers. `Report`, `Summary`, `GroupEntry`, `FileEntry`, `build`, `write_json` and `VERSION = 1` are unchanged. `json_schema_is_stable` and `characterize_json_report_with_relative_root` pass and were not modified. **Runtime check:** `twins report` on a sample tree gave version 1 with the expected keep/remove. **Text layout:** only the human text layout changed, as the user asked in UAT. **Suite:** `cargo test --workspace` gives 134 passed, 0 failed, 2 ignored. |
+| SC2 | A long scan shows single-line progress by stage, driven by the core observer; a test observer gets the same stage events in order | ✓ VERIFIED (visual: human) | Wiring is unchanged (run.rs:39 `TerminalObserver::stderr(..)` inside `Throttle`). `stage_events_in_order_without_verify`/`_with_verify` pass. `throttled_observer_sees_the_same_stage_sequence` is now stronger: it pins `(Walk,1,4) (SizeGrouping,2,4) (PartialHash,3,4) (FullHash,4,4)` exactly. |
+| SC3 | Ctrl+C stops the scan promptly, prints that it was cancelled, writes no partial report | ✓ VERIFIED | Unchanged since the initial verification: run.rs:68-70 and the main.rs:28-30 cancelled arm with exit 130. `cargo test -p twins-cli --test cli_test -- --ignored sigint` gives 2 passed. UAT tests 2 and 3 passed with the user on a real tree and on an external volume. |
+| SC4 | `meta.dry_run` comes from the run's real mode, and a test fails if a dry-run report says otherwise | ✓ VERIFIED | `pipeline.rs:448 dry_run: spec.mode.is_dry_run()`. `dry_run_in_meta_follows_run_mode` passes. |
+| SC5 | Workspace builds and passes tests and clippy (pedantic) on Rust 1.90; `rust-version` and CI raised | ✓ VERIFIED (remote CI: human) | `rust-version = "1.90"`, with no rust-toolchain file. On rustc **1.99.0**: fmt check 0, `clippy --workspace --all-targets --keep-going -D warnings` 0 (0 error/warning lines), `RUSTFLAGS=-D warnings` test (134 passed) and release build 0. On **1.90.0** with `RUSTFLAGS=-D warnings`: build all targets 0, test 134 passed, clippy -D warnings 0. ci.yml has the stable `test` job and the `msrv` job on `rust-toolchain@1.90.0`, and no commit touched it since d95fdf2. The remote run is pending a push. |
 
-### Plan Must-Have Truths (merged; restatements of SCs folded in)
+### Gap Closure (UAT)
+
+| Gap | Truth | Status | Evidence |
+|-----|-------|--------|----------|
+| G-01-4 | CI green on main: `test` (stable, clippy -D warnings) and `msrv` pass | ✓ closed locally / remote run: human | **Reproduction:** stable 1.99.0 is installed, the same clippy that failed run 37133285179. **Fixes:** observe_test.rs:238 is now an exact `assert_eq!` on the stage sequence. group_test.rs:61/85/366 and keep_test.rs:127 use `assert_eq!(.., [] as [T; 0])`. **No allow:** `grep -rn assert_is_empty crates` is empty. **CI commands:** the full test-job and msrv-job sequences pass locally. **Not pushed:** origin/main is 19 commits behind and still on the failing run. |
+| G-01-1 | Text report readable: groups separated, keep/remove clear, paths not repeated | ✓ closed in code / readability: human | **Code:** `write_text` (report.rs:165-216) implements the plan's layout, and four exact-format tests pin it. **Real run:** two groups, a blank line between them, a folder line, then `keep    beach-link.jpg` / `keep    beach.jpg  (hardlink)` / `remove  2024/beach-copy.jpg`. A file named `ev<ESC>[31mil<LF>keep` printed as one row: `remove  ev\u{1b}[31mil\nkeep`. |
+
+### Plan Must-Have Truths
+
+**Plans 01-08 and 01-09 (full verification):**
 
 | Plan | Truth (abridged) | Status | Evidence |
 |------|------------------|--------|----------|
-| 01-01 | JSON identical incl. relative root, key order | ✓ | `characterize_json_report_with_relative_root` + parity run |
-| 01-01 | Text output byte-identical, empty stderr | ✓ | `characterize_text_report` + parity run |
-| 01-01 | /System, `12X`, `[` exit 2 with same message | ✓ | `usage_errors_exit_2_with_the_same_message` (now exact glob message) + parity run |
-| 01-01 | Unreadable file summary / `--verbose` listing | ✓ | `unreadable_files_are_counted_and_listed_with_verbose` |
-| 01-01 | run.rs gets its report from `pipeline::scan` only | ✓ | grep gate empty; run.rs:42 |
-| 01-01 | Exactly one `Finished`, last, Completed/Cancelled/Failed | ✓ | `pipeline.rs:246-259`; `finished_is_the_last_event`, `walk_errors_fail_without_cancelling`, `cancel_at_walk_returns_cancelled` |
-| 01-01 | Cancel at Walk start or between walk and hashing → Cancelled | ✓ | `check(cancel)` at pipeline.rs:266/272/280; `cancel_between_stages_is_not_ignored` |
-| 01-02 | `find` emits one `done == 0` marker per stage, even empty | ✓ | find.rs:238, 330; `each_stage_starts_with_a_zero_done_marker`, `empty_index_still_marks_hash_stages` |
-| 01-02 | StageStarted order with steps 4/5, Finished last | ✓ | = SC2 tests |
-| 01-02 | Same four StageStarted on empty tree | ✓ | `stage_events_on_empty_tree` |
-| 01-02 | Progress inside its stage | ✓ | `progress_events_follow_their_stage_start` |
-| 01-02 | Cancel at PartialHash/FullHash/Verify start → Cancelled, no later StageStarted | ✓ | `cancel_at_partial_hash_stops_before_full_hash`, `cancel_at_full_hash_returns_cancelled`, `cancel_at_verify_returns_cancelled` |
-| 01-03 | `[k/N] label  n / m` line, space digit grouping | ✓ | `progress.rs::line` + 4 unit tests; `group_digits_inserts_spaces_every_three_digits`; pty capture |
-| 01-03 | Line cleared on `Finished` | ✓ | `renders_progress_and_clears_on_finish`; pty capture on success and on cancel |
-| 01-03 | Progress on any TTY incl. `--json`; non-TTY `--json` stderr empty | ✓ | run.rs uses only `is_terminal()`; `json_stderr_is_silent_when_not_a_terminal`; pty spot-check with `--json` showed progress |
-| 01-03 | `--verbose` skip lines with/without TTY, clearing the line first | ✓ | `verbose_skips_print_without_a_terminal`; pty spot-check showed `\r\x1b[K` + `skip <path>: open …` |
-| 01-03 | Throttle never drops/reorders structural events; Progress gate rules | ✓ | observe.rs:278-295; 7 throttle tests in observe_test (now Mutex-gated per WR-03, also drops stale `done`) |
-| 01-03 | Throttled observer sees same stage sequence | ✓ | `throttled_observer_sees_the_same_stage_sequence` |
-| 01-04 | rust-version 1.90, no rust-toolchain file | ✓ | Cargo.toml:10; `find` for rust-toolchain* empty |
-| 01-04 | `cargo +1.90.0` build/test pass | ✓ | run here, see SC5 |
-| 01-04 | MSRV-aware clippy passes | ✓ | stable + 1.90 clippy exit 0; one justified `#[allow(clippy::similar_names)]` in report.rs |
-| 01-04 | CI stable job unchanged + msrv job | ✓ | ci.yml (stable job intact; msrv appended) |
-| 01-05 | Walk with raised flag → `ScanError::Cancelled` | ✓ | walk.rs:125; `walk_cancelled_before_start` |
-| 01-05 | Cancel during stat phase stops visiting | ✓ | walk.rs:133-141; `walk_cancel_during_stat_phase_stops` |
-| 01-05 | Walk Progress (total None) before SizeGrouping, non-decreasing, last = files | ✓ | pipeline.rs:384-395; `walk_progress_counts_files_before_size_grouping` |
-| 01-05 | Public `scan::walk` signature unchanged | ✓ | walk.rs:77 |
-| 01-06 | `full_cancellable`/`equal_cancellable` check per 256 KiB chunk, `cancelled`+Interrupted | ✓ | hash.rs `check_cancel` at loop top; 4 hash_test tests |
-| 01-06 | Interrupted full hash never yields a Digest | ✓ | only `Err` path after check; `full_cancellable_stops_on_raised_flag` |
-| 01-06 | Cancel during hashing → `FindError::Cancelled`, file not reported | ✓ | find.rs:341-343; `cancel_during_full_hash_is_not_reported_as_error` |
-| 01-06 | Verify polls before and inside each comparison | ✓ | find.rs:433-444, 247; `verify_stops_when_cancelled` |
-| 01-06 | `hash::full`, `hash::equal`, `Hasher` methods source-compatible | ✓ | defaulted trait method; SpyHasher compiles (group_test passes) |
-| 01-07 | Ctrl+C → `scan cancelled`, nothing on stdout, exit 130 | ✓ | = SC3 |
-| 01-07 | Second Ctrl+C exits 130 immediately, never default action | ✓ | conditional shutdown registered first; spot-check (see below): 4/5 back-to-back double-SIGINT runs exited 130 with **empty** stderr, which proves the `_exit(130)` path (the cooperative path always prints `scan cancelled`) |
-| 01-07 | Exit codes 130 / 2 / 1 distinct | ✓ | `exit_code` + 6 unit tests; `usage_errors_exit_2…` |
-| 01-07 | signal-hook only in twins-cli; core tree has no signal-hook/ctrlc/tokio | ✓ | `cargo tree -p twins-core -e normal` has no match; core Cargo.toml clean |
-| 01-07 | twins-cli has no unsafe | ✓ | `grep -rn unsafe crates/twins-cli/src` empty |
-| 01-07 | Workspace incl. signal-hook passes on 1.90.0 | ✓ | see SC5; Cargo.lock has signal-hook + signal-hook-registry |
+| 01-08 | Local stable is Rust 1.99+ | ✓ | `rustc 1.99.0 (b940084d7 2026-09-28)`, `clippy 0.1.99` |
+| 01-08 | Stable clippy -D warnings passes on every target; observe_test:238 fixed; every --keep-going site fixed in code; no allow for the new lint | ✓ | `--keep-going` run exit 0; diff of the 4 test files read; `grep assert_is_empty crates` empty |
+| 01-08 | `throttled_observer_sees_the_same_stage_sequence` asserts the exact 4-step sequence | ✓ | observe_test.rs:238-246; test passes (single run in workspace output) |
+| 01-08 | CI test-job commands pass on stable; msrv-job commands pass on 1.90.0 | ✓ | ran all six commands here, all exit 0 |
+| 01-08 | ci.yml unchanged, nothing pushed; CI green confirmed by user after push | ✓ (CI green: human) | `git log d95fdf2..HEAD -- .github/workflows/ci.yml` empty; origin/main...HEAD = 0/19 |
+| 01-09 | Rows labelled `keep` / `keep … (hardlink)` / `remove`; ★ and blank marker gone | ✓ | report.rs:198-203; `grep ★ crates` empty; `text_labels_every_row_and_shows_the_group_folder`, `scan_text_marks_kept_file_and_never_lists_hardlinks_to_remove` pass; binary run |
+| 01-09 | Shared folder printed once ending in `/`, relative rows; only `/` shared → no folder line, full paths | ✓ | `shared_folder` (report.rs:243-258, `common.len() > 1`); `members_sharing_only_the_root_show_full_paths`, `characterize_text_report` pass |
+| 01-09 | Exactly one blank line between groups and before totals | ✓ | report.rs:174-176 and the `\n` before the totals; `two_groups_are_separated_by_one_blank_line` (exact) passes |
+| 01-09 | Roles come only from `keep` and `remove` | ✓ | `Role::of` (report.rs:229-238) reads only `g.keep`/`g.remove`; roles match against the raw strings, before `printable` |
+| 01-09 | Control characters escaped, one file = one row, cannot forge a row | ✓ (see advisory WR-01/WR-02) | `printable` uses `escape_debug` for `is_control` chars; `control_characters_in_paths_stay_on_one_row` (exact text + `lines().count() == 6`); ESC and LF escaped end to end in a binary run. The plan's contract (Cc) is met. Wider visual spoofing (Unicode separators, bidi, soft-wrap) is the open review advisory. |
+| 01-09 | JSON byte-identical; json tests unmodified; `write_text` signature kept | ✓ | diff hunks confined to `write_text` and helpers; `pub fn write_text(w: &mut impl Write, r: &Report) -> io::Result<()>` at report.rs:165; the json tests are untouched by the report_test diff (it starts after `json_round_trips_through_serde`) |
 
-**Score:** 39/39 distinct truths verified, 0 present but behavior-unverified. Every behavior-dependent truth (cancellation, ordering, Finished-last, no-digest-on-cancel, dry-run derivation) is backed by a named passing test, a direct run of the binary, or both.
+**Plans 01-01 to 01-07 (regression check against the 39 truths passed on 2026-10-02):** all hold. I re-checked:
+
+- **Grep gates:** the CLI orchestration gate is empty, `cargo tree -p twins-core -e normal` has no signal-hook/ctrlc/tokio, and `crates/twins-cli/src` has no `unsafe`.
+- **Wiring:** run.rs:39/42/49/68/70, main.rs:28-30 and pipeline.rs:448 are in place.
+- **Tests:** every named test from the initial report passed in the single workspace run, including the cancel-at-every-stage, Finished-last, done==0 marker, hash-cancel and throttle tests, plus the 2 ignored SIGINT tests run explicitly.
+
+One truth was intentionally superseded:
+
+| Plan | Truth | Status | Note |
+|------|-------|--------|------|
+| 01-01 | "twins scan prints byte-identical text output for the fixture tree, and nothing on stderr" | ✓ VERIFIED (superseded by 01-09) | **Refactor parity:** this characterized the refactor, and the initial verification proved it with byte-for-byte parity against the pre-phase binary (10401aa). **Requested change:** UAT G-01-1 then asked for a new text layout. `characterize_text_report` still pins exact stdout and empty stderr, now for the new layout. **Roadmap SC1:** it only requires the same groups and JSON, and those are unchanged. |
+
+**Score:** 50/50 truths verified (5 SC + 34 from 01-01..01-07 + 5 from 01-08 + 6 from 01-09), 0 present but behavior-unverified. Every behavior-dependent truth is backed by a named passing test.
 
 ### Prohibitions (all `verification: test`, all with wired enforcement)
 
 | Plan | Prohibition | Enforcement | Status |
 |------|-------------|-------------|--------|
 | 01-01 | twins-cli MUST NOT construct `report::Meta` or decide dry-run | grep gate (empty) + `dry_run_in_meta_follows_run_mode` | ✓ enforced |
-| 01-03 | Progress MUST NOT go to stdout | `! grep 'print!\|println!\|stdout' progress.rs` (empty) + `json_stderr_is_silent…` + exact-stdout characterization tests | ✓ enforced |
+| 01-03 | Progress MUST NOT go to stdout | `json_stderr_is_silent…` + exact-stdout characterization tests | ✓ enforced |
 | 01-06 | Interrupted hash MUST NOT yield a prefix digest or be reported unreadable | `full_cancellable_stops_on_raised_flag`, `cancel_during_full_hash_is_not_reported_as_error`, `verify_stops_when_cancelled` | ✓ enforced |
-| 01-07 | Cancelled/failed scan MUST NOT write report bytes or exit 0 | `sigint_cancels_scan_with_exit_130` (stdout empty, 130) — `#[ignore]`d, run here | ✓ enforced (see Info: not run in CI) |
+| 01-07 | Cancelled/failed scan MUST NOT write report bytes or exit 0 | `sigint_cancels_scan_with_exit_130` (ignored in CI, run here: pass) | ✓ enforced |
 | 01-07 | twins-core MUST NOT install signal handlers / depend on signal-hook, ctrlc, tokio | `cargo tree` gate (empty) | ✓ enforced |
+| 01-08 | A lint MUST NOT be silenced by deleting/weakening an assertion or by an allow for `assert_is_empty` | `grep -rn assert_is_empty crates` empty + clippy 1.99 `-D warnings` exit 0 + diff read: each replacement keeps the check or strengthens it (observe_test) | ✓ enforced |
+| 01-09 | JSON report types, `build`, `write_json`, `VERSION` MUST NOT change | `json_schema_is_stable` (exact, unmodified) + `characterize_json_report_with_relative_root` (unmodified) + diff confined to `write_text` | ✓ enforced |
 
 ### Required Artifacts
 
-`gsd-tools verify.artifacts` gave 22/22 passed across the 7 plans. I also read each file in full.
+`gsd-tools verify.artifacts`: 01-08 gave 1/1 and 01-09 gave 3/3. The 22/22 for 01-01..01-07 still hold, since none of those artifacts changed except where noted.
 
 | Artifact | Status | Details |
 |----------|--------|---------|
-| `crates/twins-core/src/observe.rs` | ✓ VERIFIED | CancelToken, Stage (step, Display, From), Outcome, Event (camelCase tagged), Observer, NoopObserver, Throttle |
-| `crates/twins-core/src/pipeline.rs` | ✓ VERIFIED | RunMode, ScanSpec, ScanOutcome, PipelineError, `scan()`; keeper mapping from review fixes |
-| `crates/twins-core/src/scan/walk.rs` | ✓ VERIFIED | `walk_observed`, per-root/per-entry/per-file cancel polls, `normalise_roots` pub(crate) |
-| `crates/twins-core/src/group/find.rs` | ✓ VERIFIED | done==0 markers, Ticker in-order progress, cancel re-check, `equal_cancellable` in verify |
-| `crates/twins-core/src/hash.rs`, `group/hasher.rs` | ✓ VERIFIED | cancellable full/equal; defaulted trait method, DirectHasher override |
-| `crates/twins-core/src/human.rs` | ✓ VERIFIED | `group_digits` |
-| `crates/twins-cli/src/progress.rs` | ✓ VERIFIED | `line()`, `TerminalObserver` + 7 unit tests |
-| `crates/twins-cli/src/run.rs`, `main.rs` | ✓ VERIFIED | thin shell; SIGINT; cancelled arm |
-| `Cargo.toml`, `.github/workflows/ci.yml` | ✓ VERIFIED | 1.90; msrv job |
-| tests: pipeline_test (28), observe_test (11), scan_test (10), group_test (18), hash_test (9), cli_test (11 + 2 ignored) | ✓ VERIFIED | all pass |
+| `crates/twins-core/tests/observe_test.rs` | ✓ VERIFIED | contains `(Stage::FullHash, 4, 4)` inside the throttled test |
+| `crates/twins-core/src/report.rs` | ✓ VERIFIED | `Role`, `shared_folder`, `printable`, `(hardlink)`, `escape_debug`; the JSON surface is untouched |
+| `crates/twins-core/tests/report_test.rs` | ✓ VERIFIED | 4 exact-format text tests, 3 of them new, plus the unchanged json tests |
+| `crates/twins-cli/tests/cli_test.rs` | ✓ VERIFIED | `characterize_text_report` is exact for the new layout; the hardlink and remove predicates are in place |
+| group_test.rs, keep_test.rs | ✓ VERIFIED | emptiness asserts now print values on failure |
+| Earlier artifacts (observe.rs, pipeline.rs, walk.rs, find.rs, hash.rs, hasher.rs, human.rs, progress.rs, run.rs, main.rs, Cargo.toml, ci.yml) | ✓ VERIFIED | no code change since d95fdf2; all tests pass |
 
 ### Key Link Verification
 
-`gsd-tools verify.key-links` gave 12/12 verified. I confirmed each one by reading the code.
+`gsd-tools verify.key-links`: 01-08 gave 1/1 and 01-09 gave 2/2. The 12 earlier links are unchanged.
 
 | From | To | Via | Status |
 |------|----|-----|--------|
-| run.rs | pipeline.rs | `pipeline::scan(&spec, &observer, &cancel)` then `outcome.report(now)` | WIRED |
-| pipeline.rs | report.rs | `Meta { dry_run: spec.mode.is_dry_run() }` | WIRED |
-| pipeline.rs | scan/group options | `.cancel(cancel.flag())` on both | WIRED |
-| find.rs | pipeline.rs | `on_progress`: `done == 0` becomes StageStarted | WIRED |
-| run.rs | progress.rs | `Throttle::new(TerminalObserver::stderr(..), 80ms)` | WIRED |
-| progress.rs | human.rs | `group_digits(` | WIRED |
-| ci.yml | Cargo.toml | `rust-toolchain@1.90.0` | WIRED |
-| pipeline.rs | walk.rs | `scan::walk_observed(` with a Walk Progress closure | WIRED |
-| find.rs → hasher.rs → hash.rs | | `full_cancellable(m, opts.cancel_flag())`, then `hash::full_cancellable` | WIRED |
-| run.rs | observe.rs | `register(SIGINT, cancel.flag())` | WIRED |
-| main.rs | run.rs | `Err(err) if run::is_cancelled(&err)` | WIRED |
+| observe_test.rs | pipeline.rs | the plain Recorder's StageStarted events equal the pipeline's 4-step sequence | WIRED (test passes) |
+| run.rs | report.rs | `report::write_text(&mut out, &r)` at run.rs:49; the new layout reaches stdout with no CLI change | WIRED (binary run shows it) |
+| report.rs | group/keep.rs | roles come from `GroupEntry.keep`/`remove`, built from `Action` | WIRED |
+| run.rs | pipeline.rs | `pipeline::scan(&spec, &observer, &cancel)` | WIRED |
+| run.rs | observe.rs / signal-hook | `register_conditional_shutdown` then `register(SIGINT, cancel.flag())` | WIRED |
+| main.rs | run.rs | `Err(err) if run::is_cancelled(&err)` → 130 | WIRED |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data | Source | Real data | Status |
 |----------|------|--------|-----------|--------|
-| CLI report (stdout) | `outcome.report(now)` | `pipeline::scan` (walk, Index, find, plan) | yes: parity with the pre-phase binary | ✓ FLOWING |
-| Progress line (stderr) | Event stream | pipeline `started`/Progress closures from walk counters and the find Ticker | yes: pty capture shows real counts (16 candidates, 1/16 … 16/16) | ✓ FLOWING |
-| `meta.dry_run` | `spec.mode` | `RunMode`. The CLI always uses the default `Scan`, which is correct: there is no dry-run CLI flag per D-14, and Phase 2 adds the modes | ✓ FLOWING |
+| Text report (stdout) | `Report` → `write_text` | `pipeline::scan` → `outcome.report(now)` | yes: sample tree showed real groups, hardlink and copies | ✓ FLOWING |
+| JSON report | `write_json` | same `Report` | yes: version 1, keep/remove match the text roles | ✓ FLOWING |
+| Progress line | Event stream | pipeline stage/progress closures | yes (initial verification; wiring unchanged) | ✓ FLOWING |
+| `meta.dry_run` | `spec.mode` | `RunMode` | yes | ✓ FLOWING |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| fmt / clippy / tests (stable) | `cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace` | 0 / 0 / 131 passed, 2 ignored | ✓ PASS |
-| Rust 1.90.0 | `RUSTFLAGS=-D warnings cargo +1.90.0 build --all-targets` / `test` / `clippy -D warnings` | all exit 0, 131 passed | ✓ PASS |
+| Toolchain | `rustc +stable --version`; `cargo +stable clippy --version` | 1.99.0 / 0.1.99 | ✓ PASS |
+| CI test job (stable) | `cargo +stable fmt --all --check`; `clippy --workspace --all-targets --keep-going -- -D warnings`; `RUSTFLAGS=-D warnings test --workspace`; `… build --workspace --release` | 0 / 0 (no diagnostics) / 134 passed, 0 failed, 2 ignored / 0 | ✓ PASS |
+| CI msrv job (1.90.0) | `RUSTFLAGS=-D warnings cargo +1.90.0 build --workspace --all-targets`; `… test --workspace`; `cargo +1.90.0 clippy … -D warnings` | 0 / 134 passed / 0 | ✓ PASS |
 | Real SIGINT tests | `cargo test -p twins-cli --test cli_test -- --ignored sigint` | 2 passed | ✓ PASS |
-| Output parity vs pre-phase binary | old (10401aa) vs HEAD, 13 invocations | all identical | ✓ PASS |
-| `report` + SIGINT | 16×1 GiB sparse, `kill -INT` after 1 s | rc 130, 0.016 s, stdout 0 B, stderr `scan cancelled` | ✓ PASS |
-| Pty progress + cancel | `script -q … twins scan --verify`, SIGINT | stages in order; `\r\x1b[K` then `scan cancelled`; `EXIT=130` | ✓ PASS |
-| Pty `--json` progress (D-09) | `script -q … twins scan --json` | progress drawn, then JSON | ✓ PASS |
-| Pty `--verbose` skip clears line | unreadable candidate, `-v --min-size 1` | `\r\x1b[K` + `skip <path>: open …` | ✓ PASS |
-| Double SIGINT escape hatch | `kill -INT $P; kill -INT $P` ×5 | 5/5 rc 130, stdout empty; 4/5 stderr empty (`_exit(130)` path), 1/5 cooperative | ✓ PASS |
-| Core has no signal deps | `cargo tree -p twins-core -e normal \| grep signal-hook\|ctrlc\|tokio` | no match | ✓ PASS |
+| New text layout end to end | `twins scan <tree with hardlink, subfolder copy, second pair>` | blank line between groups, folder lines, `keep` / `keep … (hardlink)` / `remove` rows, totals | ✓ PASS |
+| Control chars end to end | `twins scan --min-size 1 <dir with "ev\x1b[31mil\nkeep">` | one row: `remove  ev\u{1b}[31mil\nkeep` | ✓ PASS |
+| JSON still v1 | `twins report <tree>` | `version` 1, keep/remove consistent with the text | ✓ PASS |
+| Remote CI | `gh run list --branch main --limit 3` | latest run is 37133285179 (failure, before 01-08); fix not pushed | ? SKIP → human |
 
 ### Probe Execution
 
@@ -201,64 +210,54 @@ Step 7c: SKIPPED. There are no `scripts/*/tests/probe-*.sh` files, and no plan d
 
 | Requirement | Source Plans | Description | Status | Evidence |
 |-------------|-------------|-------------|--------|----------|
-| CORE-01 | 01-01, 01-02, 01-03, 01-05 | Pipeline in twins-core, staged progress to any caller through an observer | ✓ SATISFIED (visual check pending) | SC1, SC2; `Observer` trait + serde `Event` ready for the app/agent. REQUIREMENTS.md still shows `[ ]` / Pending, waiting for the 01-03 TTY human check. |
-| CORE-02 | 01-01, 01-02, 01-05, 01-06, 01-07 | Cancel a running scan, stops promptly, no partial state | ✓ SATISFIED (for scan; "clean" arrives in Phase 2) | SC3; cancel at every stage, mid-file and in the stat phase; no stdout on cancel |
+| CORE-01 | 01-01, 01-02, 01-03, 01-05, 01-09 | Pipeline in twins-core, staged progress to any caller through an observer | ✓ SATISFIED (readability re-check pending) | SC1, SC2, G-01-1 closed in code. REQUIREMENTS.md still shows Pending, which is right until the human UAT re-check. |
+| CORE-02 | 01-01, 01-02, 01-05, 01-06, 01-07 | Cancel a running scan, stops promptly, no partial state | ✓ SATISFIED (scan; "clean" arrives in Phase 2) | SC3; UAT tests 2 and 3 passed |
 | CORE-03 | 01-01 | `dry_run` reflects the real mode | ✓ SATISFIED | SC4 |
-| CORE-04 | 01-04, 01-07 | Builds on Rust 1.90 with tests passing | ✓ SATISFIED | SC5 |
+| CORE-04 | 01-04, 01-07, 01-08 | Builds on Rust 1.90 with tests passing | ✓ SATISFIED (remote CI pending) | SC5, G-01-4 closed locally |
 
-There are no orphaned requirements. REQUIREMENTS.md maps only CORE-01..04 to Phase 1, and every plan's `requirements` field accounts for all four.
+There are no orphaned requirements. REQUIREMENTS.md maps only CORE-01..04 to Phase 1, and each one is claimed by at least one plan.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| (all phase-modified src files) | — | TBD/FIXME/XXX/TODO/HACK/PLACEHOLDER | none found | none |
-| crates/twins-cli/tests/cli_test.rs | 425-443 | `double_sigint_exits_130_immediately` cannot tell the escape hatch from a fast cooperative cancel: on sparse files the first SIGINT alone exits in ~16 ms, so the test passes even if the second signal is never handled | ⚠️ Warning (test weakness) | The behavior itself was proven by the stderr-discriminating spot-check above. Asserting empty stderr when the second signal lands would make the test meaningful. |
-| crates/twins-cli/tests/cli_test.rs | 401-443 | The real-SIGINT tests are `#[ignore]` and no CI job runs `--ignored` (review IN-06) | ℹ️ Info | Exit-130 / no-stdout coverage is manual-only |
-| crates/twins-cli/src/run.rs | 44-49 | A second Ctrl+C that lands *while the report is being written* calls `_exit(130)` mid-write and can leave a truncated report on stdout | ℹ️ Info | Narrow window (writing is fast); outside the SC3 scenario (Ctrl+C *during a scan*) |
-| crates/twins-core/src/scan/walk.rs | 195 | Walk progress has no total and is only emitted while listing. Its final count is not forced through Throttle, and it freezes during the stat phase (IN-04). The pty run showed `walk  1 files` on a 16-file tree | ℹ️ Info | Cosmetic. On large trees the 80 ms throttle shows a rising count. |
-| crates/twins-core/src/pipeline.rs | 367-372 | `FileSkipped.reason` repeats the path (`skip /x: open /x: …`), which is now part of the public event contract (IN-03) | ℹ️ Info | Seen in the pty spot-check. Matches the pre-phase CLI text. |
-| .claude/CLAUDE.md | 20,33,39,89 | Still says Rust 1.85 (IN-08) | ℹ️ Info | Docs only |
-| review | — | 01-REVIEW iteration 3 WR-01 was fixed in 04f1f90 with 3 regression tests, but no review pass ran after that fix. Info items IN-01…IN-12 remain open | ℹ️ Info | The `InDir` keeper is not reachable from the CLI in this phase. DEL-01 belongs to Phase 2. |
+| all phase-modified files | — | TBD/FIXME/XXX/TODO/HACK/PLACEHOLDER | none found | none |
+| crates/twins-core/src/report.rs | 260-272 | `printable` escapes only Cc. U+2028/2029, bidi and zero-width characters pass through, and `\` is not escaped, so `a\nb` (literal) and `a<LF>b` print the same (review WR-01) | ⚠️ Warning (advisory) | Visual spoofing in renderers that honour those characters, such as the planned Tauri webview. The plan's Cc contract is met. |
+| crates/twins-core/src/report.rs | 192-204 | A space-padded filename soft-wraps into a forged `keep` row at column 0, and the `  (hardlink)` suffix can be imitated by a filename (review WR-02) | ⚠️ Warning (advisory) | Visual only, and it does not change the plan. It matters once Phase 2's clean uses this view for review. |
+| crates/twins-core/src/report.rs | 229-238 | Any member that is neither keep nor remove is labelled `(hardlink)` without an inode check (review IN-01) | ℹ️ Info | Correct for pipeline output. An overlapping-root alias would be mislabelled as a hardlink. |
+| crates/twins-cli/tests/cli_test.rs | ~425-443 | `double_sigint_exits_130_immediately` cannot tell the `_exit(130)` path from a fast cooperative cancel (carried from the initial report) | ⚠️ Warning (test weakness) | The behavior was proven by a spot-check and by UAT test 3. |
+| crates/twins-cli/tests/cli_test.rs | — | The SIGINT tests are `#[ignore]` and never run in CI (IN-09) | ℹ️ Info | Manual-only coverage |
+| .github/workflows/ci.yml | 14 | The `test` job uses unpinned `dtolnay/rust-toolchain@stable`, so a future clippy can break main again (T-01-18, accepted under D-16) | ℹ️ Info | This caused G-01-4 and can recur. |
 
 ### Human Verification Required
 
-#### 1. Terminal progress rendering
+#### 1. Remote CI after push (closes G-01-4 / UAT test 4)
 
-**Test:** In a real terminal, run `cargo run -q -p twins-cli -- scan ~/Downloads`. Run it again with `--verify`, then with `--json > /dev/null`.
-**Expected:** One stderr line redraws in place through `[1/4] walk  N files`, `[2/4] size grouping  N candidates`, `[3/4] partial hash  a / b` and `[4/4] full hash  a / b`. With `--verify`, the steps read /5 and `[5/5] verify` appears. The line is cleared before the report and is also drawn with `--json`. The `N candidates` wording reads well.
-**Why human:** This is visual quality and wording. The byte stream is already verified under `script(1)`.
+**Test:** Push main (19 commits ahead of origin). Then run `gh run list --branch main --limit 1` and `gh run view <run-id>`.
+**Expected:** The run is success, and both `test` (stable) and `msrv` (1.90.0) are green.
+**Why human:** Needs the user's push. Every job command passes locally on 1.99.0 and 1.90.0.
 
-#### 2. Interactive Ctrl+C on a real large tree
+#### 2. Text report readability re-check (closes G-01-1 / UAT test 1)
 
-**Test:** Run `cargo run -q -p twins-cli -- scan ~`, press Ctrl+C once while it is hashing, then run `echo $?`. Repeat with `report ~ > /tmp/twins-out.json`.
-**Expected:** The progress line disappears and one `scan cancelled` line appears, within about a second. `echo $?` prints 130 and `/tmp/twins-out.json` is empty.
-**Why human:** Needs a real home tree and a terminal-generated SIGINT. The automated and pty checks pass.
-
-#### 3. Double Ctrl+C on a slow volume
-
-**Test:** Start a scan on a slow or external volume and press Ctrl+C twice quickly.
-**Expected:** The process exits immediately and `echo $?` prints 130.
-**Why human:** Needs a blocked read. The `_exit(130)` path was observed working on a local disk.
-
-#### 4. First remote CI run
-
-**Test:** Push the branch or open the PR, then check GitHub Actions `ci`.
-**Expected:** Both `test` and `msrv` (Rust 1.90.0) are green.
-**Why human:** The job has never run remotely. Main is 83 commits ahead of origin.
+**Test:** Run `cargo run -q -p twins-cli -- scan <real folder with duplicates>` in a real terminal, with and without `--verify`.
+**Expected:** The progress line redraws in place and is cleared. Groups are separated by a blank line, each group's folder is printed once, every row says `keep`, `keep … (hardlink)` or `remove` with a short path, and the result reads well.
+**Why human:** Readability is subjective, and the user raised the gap.
 
 ### Gaps Summary
 
-There are no gaps. Each success criterion is backed by code I read, tests I ran, and direct runs of the binary:
-- The pipeline lives in `twins-core`. The CLI is a thin shell, and its output matches the pre-phase binary exactly.
-- Stage events reach any `Observer` in order and drive the terminal line.
-- One `CancelToken` stops the walk, the hashing (within a chunk) and the verify, and Ctrl+C maps to `scan cancelled` with exit 130 and nothing on stdout.
-- `meta.dry_run` is derived from `RunMode`.
-- The workspace is green on Rust 1.90.0, including pedantic clippy.
+No gaps block the goal:
 
-The status is `human_needed` only because of the four checks above: TTY look, interactive Ctrl+C on a real tree, the stuck-volume escape hatch, and the first remote msrv CI run. I also recommend strengthening `double_sigint_exits_130_immediately` to assert empty stderr, so it actually discriminates the escape-hatch path.
+- **Core pipeline:** the pipeline lives in `twins-core` behind `pipeline::scan`, and the CLI is a thin shell.
+- **Progress:** stage events reach any `Observer` in order, and that order is pinned more tightly now.
+- **Cancellation:** one `CancelToken` stops every stage, and Ctrl+C gives `scan cancelled`, exit 130 and nothing on stdout.
+- **dry_run:** `meta.dry_run` is derived from `RunMode`.
+- **Toolchain:** the workspace is green on Rust 1.90.0 and on current stable 1.99.0, including pedantic clippy.
+- **G-01-4:** closed in the code and tests. Only the remote CI run is outstanding.
+- **G-01-1:** closed in code, exactly as the plan specified, with JSON untouched. Only the user's readability judgment is outstanding.
+
+Code review iteration 4 left two warnings (WR-01, WR-02), both about filenames visually spoofing rows in the text report. They are recorded as advisory: they do not affect the plan, the JSON or the phase goal. Triage them before Phase 2 makes this text the review screen for `twins clean`, either by fixing them or by marking them `deferred` in 01-REVIEW-DISPOSITION.md.
 
 ---
 
-_Verified: 2026-10-02T21:25:00Z_
+_Verified: 2026-10-03T16:18:26Z_
 _Verifier: Claude (gsd-verifier)_
