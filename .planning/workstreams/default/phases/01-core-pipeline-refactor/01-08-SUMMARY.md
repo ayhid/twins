@@ -194,6 +194,12 @@ Nothing was pushed. The local branch is ahead of origin and waits for the user's
 - G-01-4 is closed locally. Remote confirmation needs the user's push.
 - G-01-1 (text report readability) is handled by plan 01-09.
 
+## Self-Check: PASSED
+
+- FOUND: crates/twins-core/tests/observe_test.rs, group_test.rs, keep_test.rs, 01-08-SUMMARY.md
+- FOUND commits: de508e6, b9635b7
+- `.github/workflows/ci.yml` not touched by any (01-08) commit; no `allow(clippy::assert_is_empty)` in crates
+
 ---
 *Phase: 01-core-pipeline-refactor*
 *Completed: 2026-10-03*
