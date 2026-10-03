@@ -118,7 +118,10 @@ fn scan_text_marks_kept_file_and_never_lists_hardlinks_to_remove() {
         .stdout(predicate::str::contains(
             "[1] 1.0 MiB × 3  (1.0 MiB reclaimable)",
         ))
-        .stdout(predicate::str::contains("★"))
+        .stdout(predicate::str::contains("    remove  sub/a-copy.bin\n"))
+        .stdout(predicate::str::contains("    keep    a.bin  (hardlink)\n"))
+        .stdout(predicate::str::contains("remove  a.bin").not())
+        .stdout(predicate::str::contains("remove  a-link.bin").not())
         .stdout(predicate::str::contains(
             "1 group, 1 duplicate, 1.0 MiB reclaimable",
         ));
@@ -263,12 +266,9 @@ fn characterize_json_report_with_relative_root() {
 #[test]
 fn characterize_text_report() {
     let dir = fixture();
-    let p = |rel: &str| dir.path().join(rel).display().to_string();
     let expected = format!(
-        "[1] 1.0 MiB × 3  (1.0 MiB reclaimable)\n  ★ {}\n    {}\n    {}\n\n1 group, 1 duplicate, 1.0 MiB reclaimable (7 files scanned)\n",
-        p("a-link.bin"),
-        p("a.bin"),
-        p("sub/a-copy.bin"),
+        "[1] 1.0 MiB × 3  (1.0 MiB reclaimable)\n  {}/\n    keep    a-link.bin\n    keep    a.bin  (hardlink)\n    remove  sub/a-copy.bin\n\n1 group, 1 duplicate, 1.0 MiB reclaimable (7 files scanned)\n",
+        dir.path().display(),
     );
     twins()
         .args(["scan", "--exclude", "*.log"])

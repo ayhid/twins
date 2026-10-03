@@ -107,19 +107,12 @@ fn json_round_trips_through_serde() {
 }
 
 #[test]
-fn text_marks_the_kept_file_and_summarises() {
+fn text_labels_every_row_and_shows_the_group_folder() {
     let mut out = Vec::new();
     report::write_text(&mut out, &sample()).unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(
-        text.contains("[1] 2.0 KiB × 3  (2.0 KiB reclaimable)"),
-        "{text}"
-    );
-    assert!(text.contains("  ★ /r/a.bin\n"), "{text}");
-    assert!(text.contains("    /r/b.bin\n"), "{text}");
-    assert!(
-        text.ends_with("\n1 group, 1 duplicate, 2.0 KiB reclaimable (7 files scanned)\n"),
-        "{text}"
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "[1] 2.0 KiB × 3  (2.0 KiB reclaimable)\n  /r/\n    keep    a.bin\n    keep    c.bin  (hardlink)\n    remove  b.bin\n\n1 group, 1 duplicate, 2.0 KiB reclaimable (7 files scanned)\n"
     );
 }
 
